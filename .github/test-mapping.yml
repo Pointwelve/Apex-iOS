@@ -1,0 +1,107 @@
+# Test Impact Analysis Mapping
+# Maps file patterns to test targets that should be executed
+
+# File patterns and their corresponding test targets
+patterns:
+  # Core app files - run both unit and UI tests
+  - pattern: "Apex/Apex/**/*.swift"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Core app logic changes"
+  
+  # UI specific files - run UI tests
+  - pattern: "Apex/Apex/**/ContentView.swift"
+    tests:
+      - ApexUITests
+    reason: "UI component changes"
+  
+  - pattern: "Apex/Apex/**/Views/**/*.swift"
+    tests:
+      - ApexUITests
+    reason: "View layer changes"
+  
+  # Model/Business logic - run unit tests primarily
+  - pattern: "Apex/Apex/**/Models/**/*.swift"
+    tests:
+      - ApexTests
+    reason: "Business logic changes"
+  
+  - pattern: "Apex/Apex/**/Services/**/*.swift"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Service layer changes"
+  
+  # Configuration files - run all tests
+  - pattern: "Apex/Apex/**/*.plist"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Configuration changes"
+  
+  - pattern: "Apex/Apex/**/*.entitlements"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Entitlements changes"
+  
+  # Test files themselves
+  - pattern: "Apex/ApexTests/**/*.swift"
+    tests:
+      - ApexTests
+    reason: "Unit test changes"
+  
+  - pattern: "Apex/ApexUITests/**/*.swift"
+    tests:
+      - ApexUITests
+    reason: "UI test changes"
+  
+  # Build configuration - run all tests
+  - pattern: "Apex/Apex.xcodeproj/**"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Build configuration changes"
+  
+  # CI/CD changes - run all tests
+  - pattern: ".github/workflows/**"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "CI/CD pipeline changes"
+  
+  - pattern: ".swiftlint.yml"
+    tests:
+      - ApexTests
+      - ApexUITests
+    reason: "Code quality rules changes"
+
+# Special cases
+special_cases:
+  # Always run all tests for these patterns
+  always_run_all:
+    - "fastlane/**"
+    - "scripts/**"
+    - "Package.swift"
+    - "Package.resolved"
+  
+  # Never trigger tests for these patterns
+  skip_tests:
+    - "README.md"
+    - "docs/**/*.md"
+    - ".gitignore"
+    - "CLAUDE.md"
+    - "LICENSE"
+    - "*.png"
+    - "*.jpg"
+    - "*.jpeg"
+    - "*.gif"
+
+# Thresholds
+thresholds:
+  # Maximum number of changed files before running all tests
+  max_changed_files: 20
+  
+  # If more than this percentage of files changed, run all tests
+  max_change_percentage: 30

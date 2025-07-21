@@ -75,10 +75,14 @@ jobs:
       with:
         fetch-depth: 0
     
-    - name: Install Python dependencies
+    - name: Setup Python environment
       run: |
+        # Create virtual environment to avoid externally-managed-environment error
+        python3 -m venv venv
+        source venv/bin/activate
         python3 -m pip install --upgrade pip
         python3 -m pip install pyyaml || echo "PyYAML installation failed, will fallback to running all tests"
+        echo "VIRTUAL_ENV_CREATED=true" >> $GITHUB_ENV
     
     - name: Analyze test impact
       id: analyze

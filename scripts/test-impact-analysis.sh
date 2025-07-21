@@ -198,9 +198,31 @@ parse_test_mapping() {
         return 1
     fi
     
+    # Determine which Python to use
+    local python_cmd="python3"
+    if [ -f "$PROJECT_DIR/venv/bin/python" ]; then
+        python_cmd="$PROJECT_DIR/venv/bin/python"
+        print_info "Using virtual environment Python"
+    elif command -v python3 >/dev/null 2>&1; then
+        python_cmd="python3"
+    elif command -v python >/dev/null 2>&1; then
+        python_cmd="python"
+    else
+        print_error "No Python interpreter found"
+        echo "RUN_ALL_TESTS"
+        return 0
+    fi
+    
+    # Check if PyYAML is available
+    if ! $python_cmd -c "import yaml" >/dev/null 2>&1; then
+        print_warning "PyYAML not available, falling back to run all tests"
+        echo "RUN_ALL_TESTS"
+        return 0
+    fi
+    
     # Extract patterns and their tests (simplified YAML parsing)
     # This is a basic implementation - for production, consider using yq or similar
-    python3 -c "
+    $python_cmd -c "
 import yaml
 import sys
 import fnmatch
@@ -443,7 +465,27 @@ main() {
             ;;
         validate)
             if [ -f "$TEST_MAPPING_FILE" ]; then
-                python3 -c "
+                # Determine which Python to use
+                local python_cmd="python3"
+                if [ -f "$PROJECT_DIR/venv/bin/python" ]; then
+                    python_cmd="$PROJECT_DIR/venv/bin/python"
+                    print_info "Using virtual environment Python for validation"
+                elif command -v python3 >/dev/null 2>&1; then
+                    python_cmd="python3"
+                elif command -v python >/dev/null 2>&1; then
+                    python_cmd="python"
+                else
+                    print_error "No Python interpreter found for validation"
+                    exit 1
+                fi
+                
+                # Check if PyYAML is available
+                if ! $python_cmd -c "import yaml" >/dev/null 2>&1; then
+                    print_error "PyYAML not available. Install with: pip install PyYAML"
+                    exit 1
+                fi
+                
+                $python_cmd -c "
 import yaml
 try:
     with open('$TEST_MAPPING_FILE', 'r') as f:
