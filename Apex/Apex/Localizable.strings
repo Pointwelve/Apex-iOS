@@ -1,0 +1,46 @@
+//
+//  Localizable.strings
+//  Apex
+//
+//  Created by Ryne Cheow on 21/7/25.
+//
+
+/* 
+  Localizable.strings
+  Base (English) localization for Apex app
+*/
+
+// MARK: - General
+"hello_world" = "Hello, world!";
+"welcome" = "Welcome";
+"continue" = "Continue";
+"cancel" = "Cancel";
+"ok" = "OK";
+"done" = "Done";
+"save" = "Save";
+"delete" = "Delete";
+"edit" = "Edit";
+"back" = "Back";
+"next" = "Next";
+
+// MARK: - App Specific
+"app_name" = "Apex";
+"app_tagline" = "Reach new heights";
+
+// MARK: - Navigation
+"home" = "Home";
+"settings" = "Settings";
+"profile" = "Profile";
+
+// MARK: - Error Messages
+"error_title" = "Error";
+"error_generic" = "Something went wrong. Please try again.";
+"error_network" = "Please check your internet connection and try again.";
+
+// MARK: - Loading States
+"loading" = "Loading...";
+"please_wait" = "Please wait";
+
+// MARK: - Confirmation Messages
+"are_you_sure" = "Are you sure?";
+"cannot_be_undone" = "This action cannot be undone.";
