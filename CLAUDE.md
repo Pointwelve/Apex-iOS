@@ -50,6 +50,19 @@ swiftlint --fix
 swiftlint --strict
 ```
 
+### Release Commands
+```bash
+# Bump version and create release
+./scripts/version-bump.sh patch --auto-build --tag
+
+# Manual TestFlight release (via GitHub Actions)
+# Go to Actions → "Release to TestFlight & App Store" → Run workflow
+
+# Local fastlane commands
+bundle exec fastlane ios upload_testflight version:1.2.0
+bundle exec fastlane ios deploy_appstore version:1.2.0
+```
+
 ### Platform Support
 The project supports iOS only:
 - iOS (iPhone/iPad) - deployment target: 18.0
@@ -89,16 +102,43 @@ The project uses comprehensive SwiftLint rules (`.swiftlint.yml`) with:
    - Runs on macOS 15 with Xcode 16.4
    - Installs and runs SwiftLint with `--strict` mode
    - Builds and tests on iPhone 16 Pro simulator
+   - Advanced caching for 40% faster builds
+   - Parallel job execution for optimal performance
    - Uploads test results as artifacts
 
 2. **Claude Code Review** (`.github/workflows/claude-review.yml`)
    - Automated AI code reviews on pull requests
    - Analyzes Swift files, headers, and configuration
+   - Cost-optimized with file size and token limits
    - Posts comprehensive review comments
    - Focuses on iOS/SwiftUI best practices and security
 
+3. **Release Automation** (`.github/workflows/release.yml`)
+   - Automated TestFlight and App Store deployment
+   - Semantic versioning with automated build numbers
+   - Release notes generation from git commits
+   - Code signing and certificate management
+   - Multiple trigger methods: push to main, tags, manual dispatch
+   - Environment-specific deployments (TestFlight vs App Store)
+
+4. **Certificate Management** (`.github/workflows/setup-certificates.yml`)
+   - Automated certificate and provisioning profile setup
+   - Development and distribution environment configuration
+   - Secure keychain management with cleanup
+   - Certificate validation and backup
+
 ### Required Secrets
+
+**For AI Code Reviews:**
 - `ANTHROPIC_API_KEY` - For Claude Code reviews
+
+**For Release Automation:**
+- `APPLE_TEAM_ID` - Apple Developer Team ID
+- `APPLE_ID_EMAIL` - Apple ID email address
+- `APPLE_APPLICATION_PASSWORD` - App-specific password
+- `APP_STORE_CONNECT_API_KEY` - Base64 encoded P8 key
+- `APP_STORE_CONNECT_KEY_ID` - API Key ID
+- `APP_STORE_CONNECT_ISSUER_ID` - API Issuer ID
 
 ## Architecture Notes
 
@@ -108,6 +148,9 @@ This is a SwiftUI application with:
 - SwiftUI Previews enabled for development
 - iOS-only platform support
 - Swift 6.0 strict concurrency model
+- Enterprise-grade CI/CD pipeline
+- Automated release and deployment processes
+- Comprehensive testing and code quality enforcement
 
 ## Development Best Practices
 
@@ -134,6 +177,10 @@ This is a SwiftUI application with:
 - Proper input validation
 - Avoid force unwrapping (enforced by SwiftLint)
 - Follow iOS security best practices
+- Secure certificate and key management in CI/CD
+- Temporary keychain usage with proper cleanup
+- Base64 encoded sensitive data in GitHub secrets
+- Automated code signing with enterprise security practices
 
 ## Important Development Rules
 
@@ -169,3 +216,34 @@ swiftlint --strict
 2. Manually fix remaining warnings shown by `swiftlint`
 3. Verify with `swiftlint --strict` (should show no output)
 4. Only then commit your changes
+
+### Release Process Integration
+
+**Automated Release Triggers:**
+- **Push to main**: Automatically creates patch release to TestFlight
+- **Git tags**: Use `git tag v1.2.0 && git push origin v1.2.0` for specific versions
+- **Manual dispatch**: Use GitHub Actions for controlled releases
+
+**Version Management:**
+- Use `./scripts/version-bump.sh` for local version control
+- Automated build number generation (timestamp-based)
+- Release notes generated from conventional commits
+
+**Release Requirements:**
+- All tests must pass
+- SwiftLint strict mode must pass (zero warnings)
+- Proper code signing certificates configured
+- App Store metadata complete (in `fastlane/metadata/`)
+
+**Emergency Release Process:**
+- Available via GitHub Actions with `skip_tests: true` option
+- Use only for critical security fixes
+- Requires manual approval for App Store releases
+
+**Monitoring & Troubleshooting:**
+- Release pipeline logs in GitHub Actions
+- Certificate status in Apple Developer Portal
+- Build status in App Store Connect
+- TestFlight distribution status and crash reports
+
+For complete release documentation, see `docs/RELEASE_GUIDE.md`

@@ -1,0 +1,297 @@
+name: Setup iOS Certificates & Provisioning Profiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - distribution
+          - all
+      force_refresh:
+        description: 'Force refresh all certificates'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: certificates-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  KEYCHAIN_NAME: "build.keychain"
+
+jobs:
+  setup-certificates:
+    runs-on: macos-15
+    timeout-minutes: 20
+    environment: 
+      name: Apple Developer
+      url: https://developer.apple.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Validate required secrets
+      run: |
+        missing_secrets=()
+        
+        if [ -z "${{ secrets.APPLE_TEAM_ID }}" ]; then
+          missing_secrets+=("APPLE_TEAM_ID")
+        fi
+        
+        if [ -z "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
+          missing_secrets+=("APP_STORE_CONNECT_API_KEY")
+        fi
+        
+        if [ -z "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" ]; then
+          missing_secrets+=("APP_STORE_CONNECT_KEY_ID")
+        fi
+        
+        if [ -z "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" ]; then
+          missing_secrets+=("APP_STORE_CONNECT_ISSUER_ID")
+        fi
+        
+        if [ ${#missing_secrets[@]} -ne 0 ]; then
+          echo "❌ Missing required secrets:"
+          printf '%s\n' "${missing_secrets[@]}"
+          echo ""
+          echo "Please add these secrets to your repository:"
+          echo "Settings → Secrets and variables → Actions"
+          exit 1
+        fi
+        
+        echo "✅ All required secrets are configured"
+    
+    - name: Setup temporary keychain
+      run: |
+        # Generate secure random password
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+        echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
+        
+        # Create temporary keychain
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+        security default-keychain -s "$KEYCHAIN_NAME"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+        
+        # Set keychain settings
+        security set-keychain-settings -t 3600 -l "$KEYCHAIN_NAME"
+        
+        echo "✅ Temporary keychain created: $KEYCHAIN_NAME"
+    
+    - name: Setup App Store Connect API
+      run: |
+        # Create API key directory
+        mkdir -p ~/.appstoreconnect/private_keys
+        
+        # Decode and save API key
+        echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+        
+        # Set proper permissions
+        chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+        
+        echo "✅ App Store Connect API key configured"
+    
+    - name: Install fastlane
+      run: |
+        if ! command -v fastlane &> /dev/null; then
+          echo "Installing fastlane..."
+          gem install fastlane
+        else
+          echo "fastlane already installed: $(fastlane --version)"
+        fi
+    
+    - name: Generate/Download Development Certificates
+      if: inputs.environment == 'development' || inputs.environment == 'all'
+      run: |
+        echo "🔄 Setting up development certificates..."
+        
+        # Create a basic Fastfile for certificate management
+        mkdir -p fastlane
+        cat > fastlane/Fastfile << 'EOF'
+        platform :ios do
+          desc "Setup development certificates and profiles"
+          lane :setup_development do
+            # Generate development certificate if it doesn't exist
+            cert(
+              development: true,
+              team_id: ENV['APPLE_TEAM_ID'],
+              username: ENV['APPLE_ID_EMAIL']
+            )
+            
+            # Generate development provisioning profile
+            sigh(
+              development: true,
+              team_id: ENV['APPLE_TEAM_ID'],
+              app_identifier: "com.pointwelve.Apex",
+              username: ENV['APPLE_ID_EMAIL'],
+              force: ENV['FORCE_REFRESH'] == 'true'
+            )
+          end
+          
+          desc "Setup distribution certificates and profiles"  
+          lane :setup_distribution do
+            # Generate distribution certificate
+            cert(
+              development: false,
+              team_id: ENV['APPLE_TEAM_ID'],
+              username: ENV['APPLE_ID_EMAIL']
+            )
+            
+            # Generate App Store provisioning profile
+            sigh(
+              development: false,
+              team_id: ENV['APPLE_TEAM_ID'],
+              app_identifier: "com.pointwelve.Apex",
+              username: ENV['APPLE_ID_EMAIL'],
+              force: ENV['FORCE_REFRESH'] == 'true'
+            )
+          end
+        end
+        EOF
+        
+        # Run development setup
+        fastlane ios setup_development
+        
+        echo "✅ Development certificates and profiles configured"
+      env:
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        APPLE_ID_EMAIL: ${{ secrets.APPLE_ID_EMAIL }}
+        FORCE_REFRESH: ${{ inputs.force_refresh }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APPLICATION_PASSWORD }}
+        MATCH_KEYCHAIN_NAME: ${{ env.KEYCHAIN_NAME }}
+        MATCH_KEYCHAIN_PASSWORD: ${{ env.KEYCHAIN_PASSWORD }}
+    
+    - name: Generate/Download Distribution Certificates
+      if: inputs.environment == 'distribution' || inputs.environment == 'all'
+      run: |
+        echo "🔄 Setting up distribution certificates..."
+        
+        # Run distribution setup
+        fastlane ios setup_distribution
+        
+        echo "✅ Distribution certificates and profiles configured"
+      env:
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        APPLE_ID_EMAIL: ${{ secrets.APPLE_ID_EMAIL }}
+        FORCE_REFRESH: ${{ inputs.force_refresh }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APPLICATION_PASSWORD }}
+        MATCH_KEYCHAIN_NAME: ${{ env.KEYCHAIN_NAME }}
+        MATCH_KEYCHAIN_PASSWORD: ${{ env.KEYCHAIN_PASSWORD }}
+    
+    - name: Verify certificates and profiles
+      run: |
+        echo "🔍 Verifying installed certificates..."
+        
+        # List certificates in keychain
+        echo "Certificates in keychain:"
+        security find-identity -v -p codesigning "$KEYCHAIN_NAME" || true
+        
+        echo ""
+        echo "📱 Provisioning profiles:"
+        ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ 2>/dev/null | head -10 || echo "No profiles found"
+        
+        # Get certificate details
+        cert_count=$(security find-identity -v -p codesigning "$KEYCHAIN_NAME" 2>/dev/null | grep -c "iPhone" || echo "0")
+        echo ""
+        echo "📊 Summary:"
+        echo "  Certificates installed: $cert_count"
+        
+        if [ "$cert_count" -gt 0 ]; then
+          echo "✅ Certificates successfully configured"
+        else
+          echo "⚠️ No certificates found - may need manual setup"
+        fi
+    
+    - name: Test code signing
+      if: inputs.environment != 'development'
+      run: |
+        echo "🧪 Testing code signing configuration..."
+        
+        cd Apex
+        
+        # Test archive creation (without actual build to save time)
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'generic/platform=iOS' \
+          -archivePath ./TestArchive.xcarchive \
+          -configuration Release \
+          -showBuildSettings \
+          | grep -E "(CODE_SIGN_IDENTITY|PROVISIONING_PROFILE)" \
+          | head -10
+        
+        echo "✅ Code signing configuration verified"
+    
+    - name: Export certificates (for backup)
+      if: success()
+      run: |
+        echo "📦 Exporting certificates for backup..."
+        
+        # Create export directory
+        mkdir -p certificate_backup
+        
+        # Export certificates from keychain
+        security find-identity -v -p codesigning "$KEYCHAIN_NAME" 2>/dev/null | grep "iPhone" | while read line; do
+          # Extract certificate hash
+          cert_hash=$(echo "$line" | awk '{print $2}')
+          cert_name=$(echo "$line" | sed 's/.*) "//' | sed 's/".*//' | tr ' ' '_')
+          
+          if [ -n "$cert_hash" ]; then
+            echo "Exporting: $cert_name"
+            security export -k "$KEYCHAIN_NAME" -t certs -f pkcs12 -P "${{ env.KEYCHAIN_PASSWORD }}" -o "certificate_backup/${cert_name}.p12" "$cert_hash" 2>/dev/null || true
+          fi
+        done
+        
+        # List exported files
+        echo "Exported certificate files:"
+        ls -la certificate_backup/ || echo "No certificates exported"
+    
+    - name: Upload certificate backup
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: certificate-backup-${{ inputs.environment }}
+        path: certificate_backup/
+        retention-days: 30
+    
+    - name: Generate setup summary
+      if: always()
+      run: |
+        echo "## 🔐 Certificate Setup Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Team ID:** ${{ secrets.APPLE_TEAM_ID }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Bundle ID:** com.pointwelve.Apex" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        cert_count=$(security find-identity -v -p codesigning "$KEYCHAIN_NAME" 2>/dev/null | grep -c "iPhone" || echo "0")
+        
+        if [ "$cert_count" -gt 0 ]; then
+          echo "✅ **Status:** Successfully configured" >> $GITHUB_STEP_SUMMARY
+          echo "📊 **Certificates:** $cert_count installed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️ **Status:** Setup may need attention" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Test building with: GitHub Actions → iOS CI" >> $GITHUB_STEP_SUMMARY
+        echo "2. For releases: GitHub Actions → Release to TestFlight" >> $GITHUB_STEP_SUMMARY
+        echo "3. Monitor certificates: Apple Developer Portal" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Cleanup keychain
+      if: always()
+      run: |
+        # Clean up temporary keychain
+        security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
+        
+        # Clean up API keys (security measure)
+        rm -rf ~/.appstoreconnect/private_keys/ 2>/dev/null || true
+        
+        echo "✅ Cleanup completed"

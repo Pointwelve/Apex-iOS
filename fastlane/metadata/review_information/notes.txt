@@ -1,0 +1,20 @@
+Thank you for reviewing Apex!
+
+This is a modern iOS application built with:
+- SwiftUI framework
+- Swift 6.0 language features
+- iOS 18.0+ deployment target
+- Comprehensive testing suite
+
+The app follows Apple's Human Interface Guidelines and uses standard iOS frameworks and APIs.
+
+No special account or configuration is required for testing. The app works immediately upon installation.
+
+For any questions during review, please contact: review@pointwelve.com
+
+Test Environment:
+- Recommended device: iPhone 15 Pro or later
+- iOS version: 18.0+
+- No network connectivity required for core functionality
+
+Thank you for your time and consideration!

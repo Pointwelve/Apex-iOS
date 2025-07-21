@@ -1,0 +1,476 @@
+name: Release to TestFlight & App Store
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type'
+        required: true
+        default: 'testflight'
+        type: choice
+        options:
+          - testflight
+          - appstore
+      version_bump:
+        description: 'Version bump type'
+        required: false
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - none
+      skip_tests:
+        description: 'Skip tests (emergency release only)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  XCODE_VERSION: "16.4"
+  IOS_DEPLOYMENT_TARGET: "18.0"
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
+jobs:
+  version-check:
+    runs-on: macos-15
+    outputs:
+      should_release: ${{ steps.version-check.outputs.should_release }}
+      new_version: ${{ steps.version-check.outputs.new_version }}
+      build_number: ${{ steps.version-check.outputs.build_number }}
+      release_notes: ${{ steps.release-notes.outputs.notes }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Check version and determine release
+      id: version-check
+      run: |
+        # Get current version from Info.plist
+        current_version=$(plutil -p Apex/Apex/Info.plist | grep CFBundleShortVersionString | awk '{print $3}' | tr -d '"')
+        
+        # Determine if this is a tag-based release
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          tag_version=$(echo "${{ github.ref }}" | sed 's/refs\/tags\/v//')
+          echo "Tag-based release: $tag_version"
+          echo "should_release=true" >> $GITHUB_OUTPUT
+          echo "new_version=$tag_version" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ "${{ inputs.version_bump }}" != "none" ]]; then
+            # Calculate new version based on bump type
+            IFS='.' read -r major minor patch <<< "$current_version"
+            case "${{ inputs.version_bump }}" in
+              major) new_version="$((major + 1)).0.0" ;;
+              minor) new_version="$major.$((minor + 1)).0" ;;
+              patch) new_version="$major.$minor.$((patch + 1))" ;;
+            esac
+            echo "Manual release with version bump: $new_version"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          else
+            echo "Manual release without version bump: $current_version"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "new_version=$current_version" >> $GITHUB_OUTPUT
+          fi
+        else
+          # Check if there are significant changes since last release
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$last_tag" ]; then
+            commits_since_release=$(git rev-list ${last_tag}..HEAD --count)
+            if [ $commits_since_release -gt 0 ]; then
+              # Auto-patch version bump for main branch
+              IFS='.' read -r major minor patch <<< "$current_version"
+              new_version="$major.$minor.$((patch + 1))"
+              echo "Auto-release with patch bump: $new_version"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "new_version=$new_version" >> $GITHUB_OUTPUT
+            else
+              echo "No commits since last release"
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "First release: $current_version"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "new_version=$current_version" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        # Generate build number (timestamp-based)
+        build_number=$(date +"%Y%m%d%H%M")
+        echo "build_number=$build_number" >> $GITHUB_OUTPUT
+        
+        echo "Current version: $current_version"
+        echo "Build number: $build_number"
+    
+    - name: Generate release notes
+      id: release-notes
+      if: steps.version-check.outputs.should_release == 'true'
+      run: |
+        # Get commits since last tag for release notes
+        last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
+        echo "# Release Notes" > release_notes.md
+        echo "" >> release_notes.md
+        
+        if [ -n "$last_tag" ]; then
+          echo "## Changes since $last_tag" >> release_notes.md
+          echo "" >> release_notes.md
+          
+          # Generate changelog from commits
+          git log ${last_tag}..HEAD --pretty=format:"- %s" \
+            --grep="feat:" --grep="fix:" --grep="perf:" \
+            --grep="BREAKING CHANGE:" --invert-grep >> release_notes.md || true
+            
+          # Add all commits if no conventional commits found
+          if [ ! -s release_notes.md ] || [ $(wc -l < release_notes.md) -le 3 ]; then
+            echo "" > release_notes.md
+            echo "## Changes" >> release_notes.md
+            git log ${last_tag}..HEAD --pretty=format:"- %s" --max-count=20 >> release_notes.md
+          fi
+        else
+          echo "## Initial Release" >> release_notes.md
+          echo "- First release of Apex iOS app" >> release_notes.md
+        fi
+        
+        # Convert to single line for GitHub Actions output
+        notes=$(cat release_notes.md | base64 -i -)
+        echo "notes=$notes" >> $GITHUB_OUTPUT
+
+  build-and-test:
+    needs: [version-check]
+    if: needs.version-check.outputs.should_release == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Select Xcode
+      run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
+    
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Developer/Xcode/DerivedData
+          Apex/.build
+          ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-release-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-release-
+          ${{ runner.os }}-deriveddata-
+    
+    - name: Install dependencies
+      run: |
+        if ! command -v xcpretty &> /dev/null; then
+          gem install xcpretty
+        fi
+        if ! command -v swiftlint &> /dev/null; then
+          brew install swiftlint
+        fi
+    
+    - name: Run SwiftLint
+      if: ${{ !inputs.skip_tests }}
+      run: swiftlint --strict
+    
+    - name: Update version and build number
+      run: |
+        # Update CFBundleShortVersionString
+        plutil -replace CFBundleShortVersionString -string "${{ needs.version-check.outputs.new_version }}" Apex/Apex/Info.plist
+        
+        # Update CFBundleVersion
+        plutil -replace CFBundleVersion -string "${{ needs.version-check.outputs.build_number }}" Apex/Apex/Info.plist
+        
+        echo "Updated to version ${{ needs.version-check.outputs.new_version }} build ${{ needs.version-check.outputs.build_number }}"
+    
+    - name: Build and test
+      if: ${{ !inputs.skip_tests }}
+      run: |
+        cd Apex
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0' \
+          -derivedDataPath ./DerivedData \
+          -resultBundlePath ./TestResults \
+          clean test | xcpretty
+    
+    - name: Archive for distribution
+      run: |
+        cd Apex
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'generic/platform=iOS' \
+          -archivePath ./Apex.xcarchive \
+          -derivedDataPath ./DerivedData \
+          -configuration Release \
+          archive | xcpretty
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: apex-archive-${{ needs.version-check.outputs.new_version }}
+        path: |
+          Apex/Apex.xcarchive
+          Apex/TestResults
+        retention-days: 30
+    
+    - name: Export archive info
+      run: |
+        if [ -d "Apex/Apex.xcarchive" ]; then
+          echo "✅ Archive created successfully"
+          echo "ARCHIVE_READY=true" >> $GITHUB_ENV
+        else
+          echo "❌ Archive creation failed"
+          echo "ARCHIVE_READY=false" >> $GITHUB_ENV
+          exit 1
+        fi
+
+  deploy-testflight:
+    needs: [version-check, build-and-test]
+    if: |
+      needs.version-check.outputs.should_release == 'true' && 
+      (inputs.release_type == 'testflight' || github.event_name == 'push' || github.event_name == 'tag')
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: 
+      name: TestFlight
+      url: https://appstoreconnect.apple.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: apex-archive-${{ needs.version-check.outputs.new_version }}
+        path: ./artifacts
+    
+    - name: Setup App Store Connect API
+      run: |
+        # Create API key file from secrets
+        mkdir -p ~/.appstoreconnect/private_keys
+        echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+        
+        # Set permissions
+        chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+    
+    - name: Export IPA for TestFlight
+      run: |
+        # Create export options plist
+        cat > ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>method</key>
+          <string>app-store</string>
+          <key>destination</key>
+          <string>upload</string>
+          <key>uploadBitcode</key>
+          <false/>
+          <key>uploadSymbols</key>
+          <true/>
+          <key>compileBitcode</key>
+          <false/>
+          <key>manageAppVersionAndBuildNumber</key>
+          <false/>
+          <key>teamID</key>
+          <string>${{ secrets.APPLE_TEAM_ID }}</string>
+        </dict>
+        </plist>
+        EOF
+        
+        # Export IPA
+        xcodebuild -exportArchive \
+          -archivePath ./artifacts/Apex.xcarchive \
+          -exportPath ./export \
+          -exportOptionsPlist ExportOptions.plist \
+          -allowProvisioningUpdates
+    
+    - name: Upload to TestFlight
+      run: |
+        # Generate release notes
+        echo "${{ needs.version-check.outputs.release_notes }}" | base64 --decode > release_notes.txt
+        
+        # Upload to TestFlight using altool
+        xcrun altool --upload-app \
+          --type ios \
+          --file "./export/Apex.ipa" \
+          --apiKey "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+          --apiIssuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
+          --verbose
+        
+        echo "✅ Successfully uploaded to TestFlight!"
+        echo "🚀 Version: ${{ needs.version-check.outputs.new_version }}"
+        echo "🏗️ Build: ${{ needs.version-check.outputs.build_number }}"
+    
+    - name: Create Git tag
+      if: github.event_name != 'workflow_dispatch' || inputs.version_bump != 'none'
+      run: |
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        
+        # Create and push tag
+        git tag -a "v${{ needs.version-check.outputs.new_version }}" \
+          -m "Release v${{ needs.version-check.outputs.new_version }}" \
+          -m "Build: ${{ needs.version-check.outputs.build_number }}"
+        
+        git push origin "v${{ needs.version-check.outputs.new_version }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Upload IPA artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: apex-ipa-${{ needs.version-check.outputs.new_version }}
+        path: ./export/Apex.ipa
+        retention-days: 90
+
+  deploy-appstore:
+    needs: [version-check, build-and-test]
+    if: |
+      needs.version-check.outputs.should_release == 'true' && 
+      inputs.release_type == 'appstore'
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: 
+      name: App Store
+      url: https://appstoreconnect.apple.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: apex-archive-${{ needs.version-check.outputs.new_version }}
+        path: ./artifacts
+    
+    - name: Setup App Store Connect API
+      run: |
+        mkdir -p ~/.appstoreconnect/private_keys
+        echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+        chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+    
+    - name: Export IPA for App Store
+      run: |
+        cat > ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>method</key>
+          <string>app-store</string>
+          <key>destination</key>
+          <string>upload</string>
+          <key>uploadBitcode</key>
+          <false/>
+          <key>uploadSymbols</key>
+          <true/>
+          <key>compileBitcode</key>
+          <false/>
+          <key>manageAppVersionAndBuildNumber</key>
+          <false/>
+          <key>teamID</key>
+          <string>${{ secrets.APPLE_TEAM_ID }}</string>
+        </dict>
+        </plist>
+        EOF
+        
+        xcodebuild -exportArchive \
+          -archivePath ./artifacts/Apex.xcarchive \
+          -exportPath ./export \
+          -exportOptionsPlist ExportOptions.plist \
+          -allowProvisioningUpdates
+    
+    - name: Submit for App Store Review
+      run: |
+        # Upload and submit for review
+        xcrun altool --upload-app \
+          --type ios \
+          --file "./export/Apex.ipa" \
+          --apiKey "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+          --apiIssuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
+          --verbose
+        
+        echo "✅ Successfully submitted to App Store for review!"
+        echo "🏪 Version: ${{ needs.version-check.outputs.new_version }}"
+        echo "⏱️ Build: ${{ needs.version-check.outputs.build_number }}"
+
+  notify-release:
+    needs: [version-check, deploy-testflight, deploy-appstore]
+    if: always() && needs.version-check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Create GitHub Release
+      if: |
+        (needs.deploy-testflight.result == 'success' || needs.deploy-appstore.result == 'success') &&
+        (github.event_name != 'workflow_dispatch' || inputs.version_bump != 'none')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ needs.version-check.outputs.new_version }}
+        release_name: Release v${{ needs.version-check.outputs.new_version }}
+        body: |
+          ${{ needs.version-check.outputs.release_notes }}
+          
+          **Build Information:**
+          - Version: ${{ needs.version-check.outputs.new_version }}
+          - Build: ${{ needs.version-check.outputs.build_number }}
+          - Platform: iOS ${{ env.IOS_DEPLOYMENT_TARGET }}+
+          - Xcode: ${{ env.XCODE_VERSION }}
+          
+          **Distribution:**
+          ${{ needs.deploy-testflight.result == 'success' && '✅ TestFlight' || '' }}
+          ${{ needs.deploy-appstore.result == 'success' && '✅ App Store' || '' }}
+        draft: false
+        prerelease: false
+    
+    - name: Workflow Summary
+      run: |
+        echo "## 🚀 Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ needs.version-check.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Build:** ${{ needs.version-check.outputs.build_number }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.deploy-testflight.result }}" == "success" ]; then
+          echo "✅ **TestFlight:** Successfully uploaded" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.deploy-appstore.result }}" == "success" ]; then
+          echo "✅ **App Store:** Successfully submitted for review" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ needs.deploy-testflight.result }}" == "success" ]; then
+          echo "- TestFlight build will be available for testing within 10-15 minutes" >> $GITHUB_STEP_SUMMARY
+          echo "- Add external testers in App Store Connect if needed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.deploy-appstore.result }}" == "success" ]; then
+          echo "- Monitor App Store review status in App Store Connect" >> $GITHUB_STEP_SUMMARY
+          echo "- Typical review time: 24-48 hours" >> $GITHUB_STEP_SUMMARY
+        fi

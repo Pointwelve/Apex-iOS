@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 90;
 	objects = {
 
 /* Begin PBXContainerItemProxy section */
@@ -50,24 +50,18 @@
 /* Begin PBXFrameworksBuildPhase section */
 		6D585E312E2E5786003590F3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E3F2E2E5787003590F3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E492E2E5787003590F3 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -106,14 +100,10 @@
 			);
 			buildRules = (
 			);
-			dependencies = (
-			);
 			fileSystemSynchronizedGroups = (
 				6D585E362E2E5786003590F3 /* Apex */,
 			);
 			name = Apex;
-			packageProductDependencies = (
-			);
 			productName = Apex;
 			productReference = 6D585E342E2E5786003590F3 /* Apex.app */;
 			productType = "com.apple.product-type.application";
@@ -135,8 +125,6 @@
 				6D585E452E2E5787003590F3 /* ApexTests */,
 			);
 			name = ApexTests;
-			packageProductDependencies = (
-			);
 			productName = ApexTests;
 			productReference = 6D585E422E2E5787003590F3 /* ApexTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -158,8 +146,6 @@
 				6D585E4F2E2E5787003590F3 /* ApexUITests */,
 			);
 			name = ApexUITests;
-			packageProductDependencies = (
-			);
 			productName = ApexUITests;
 			productReference = 6D585E4C2E2E5787003590F3 /* ApexUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -196,7 +182,7 @@
 			);
 			mainGroup = 6D585E2B2E2E5786003590F3;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
+			preferredProjectObjectVersion = 90;
 			productRefGroup = 6D585E352E2E5786003590F3 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -211,24 +197,18 @@
 /* Begin PBXResourcesBuildPhase section */
 		6D585E322E2E5786003590F3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E402E2E5787003590F3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E4A2E2E5787003590F3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
@@ -236,45 +216,34 @@
 		6D585E5F2E2E5788003590F3 /* SwiftLint */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
 			name = SwiftLint;
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if which swiftlint > /dev/null; then\n  swiftlint\nelse\n  echo \"warning: SwiftLint not installed, install with 'brew install swiftlint'\"\nfi\n";
+			shellScript = (
+				"if which swiftlint > /dev/null; then",
+				"  swiftlint",
+				"else",
+				"  echo \"warning: SwiftLint not installed, install with 'brew install swiftlint'\"",
+				"fi",
+				"",
+			);
 		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		6D585E302E2E5786003590F3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E3E2E2E5787003590F3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		6D585E482E2E5787003590F3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
@@ -292,7 +261,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		6D585E542E2E5787003590F3 /* Debug */ = {
+		6D585E542E2E5787003590F3 /* Debug configuration for PBXProject "Apex" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -353,7 +322,7 @@
 			};
 			name = Debug;
 		};
-		6D585E552E2E5787003590F3 /* Release */ = {
+		6D585E552E2E5787003590F3 /* Release configuration for PBXProject "Apex" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -406,7 +375,7 @@
 			};
 			name = Release;
 		};
-		6D585E572E2E5787003590F3 /* Debug */ = {
+		6D585E572E2E5787003590F3 /* Debug configuration for PBXNativeTarget "Apex" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -440,7 +409,7 @@
 			};
 			name = Debug;
 		};
-		6D585E582E2E5787003590F3 /* Release */ = {
+		6D585E582E2E5787003590F3 /* Release configuration for PBXNativeTarget "Apex" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -474,7 +443,7 @@
 			};
 			name = Release;
 		};
-		6D585E5A2E2E5787003590F3 /* Debug */ = {
+		6D585E5A2E2E5787003590F3 /* Debug configuration for PBXNativeTarget "ApexTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -494,7 +463,7 @@
 			};
 			name = Debug;
 		};
-		6D585E5B2E2E5787003590F3 /* Release */ = {
+		6D585E5B2E2E5787003590F3 /* Release configuration for PBXNativeTarget "ApexTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -514,7 +483,7 @@
 			};
 			name = Release;
 		};
-		6D585E5D2E2E5787003590F3 /* Debug */ = {
+		6D585E5D2E2E5787003590F3 /* Debug configuration for PBXNativeTarget "ApexUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -533,7 +502,7 @@
 			};
 			name = Debug;
 		};
-		6D585E5E2E2E5787003590F3 /* Release */ = {
+		6D585E5E2E2E5787003590F3 /* Release configuration for PBXNativeTarget "ApexUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -558,37 +527,33 @@
 		6D585E2F2E2E5786003590F3 /* Build configuration list for PBXProject "Apex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				6D585E542E2E5787003590F3 /* Debug */,
-				6D585E552E2E5787003590F3 /* Release */,
+				6D585E542E2E5787003590F3 /* Debug configuration for PBXProject "Apex" */,
+				6D585E552E2E5787003590F3 /* Release configuration for PBXProject "Apex" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		6D585E562E2E5787003590F3 /* Build configuration list for PBXNativeTarget "Apex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				6D585E572E2E5787003590F3 /* Debug */,
-				6D585E582E2E5787003590F3 /* Release */,
+				6D585E572E2E5787003590F3 /* Debug configuration for PBXNativeTarget "Apex" */,
+				6D585E582E2E5787003590F3 /* Release configuration for PBXNativeTarget "Apex" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		6D585E592E2E5787003590F3 /* Build configuration list for PBXNativeTarget "ApexTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				6D585E5A2E2E5787003590F3 /* Debug */,
-				6D585E5B2E2E5787003590F3 /* Release */,
+				6D585E5A2E2E5787003590F3 /* Debug configuration for PBXNativeTarget "ApexTests" */,
+				6D585E5B2E2E5787003590F3 /* Release configuration for PBXNativeTarget "ApexTests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		6D585E5C2E2E5787003590F3 /* Build configuration list for PBXNativeTarget "ApexUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				6D585E5D2E2E5787003590F3 /* Debug */,
-				6D585E5E2E2E5787003590F3 /* Release */,
+				6D585E5D2E2E5787003590F3 /* Debug configuration for PBXNativeTarget "ApexUITests" */,
+				6D585E5E2E2E5787003590F3 /* Release configuration for PBXNativeTarget "ApexUITests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */

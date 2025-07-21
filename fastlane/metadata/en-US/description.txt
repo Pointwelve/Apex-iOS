@@ -1,0 +1,17 @@
+Apex is a modern iOS application built with SwiftUI, designed to deliver an exceptional user experience.
+
+KEY FEATURES:
+• Modern SwiftUI interface
+• iOS 18.0+ compatibility
+• Optimized performance
+• Intuitive user experience
+
+TECHNICAL HIGHLIGHTS:
+• Built with Swift 6.0
+• SwiftUI architecture
+• Multi-platform support
+• Comprehensive testing
+
+Apex represents the future of iOS development, combining cutting-edge technology with thoughtful design to create an app that users love.
+
+Perfect for users who appreciate quality, performance, and modern iOS design patterns.

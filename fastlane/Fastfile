@@ -1,0 +1,264 @@
+# Fastfile for Apex iOS
+
+default_platform(:ios)
+
+platform :ios do
+  # App Configuration
+  APP_IDENTIFIER = "com.pointwelve.Apex"
+  SCHEME = "Apex"
+  WORKSPACE = "Apex.xcodeproj"
+  
+  before_all do
+    ensure_xcode_version(version: "16.4")
+  end
+
+  desc "Setup development environment"
+  lane :setup_dev do
+    setup_certificates(development: true)
+    setup_provisioning_profiles(development: true)
+  end
+
+  desc "Setup distribution environment"
+  lane :setup_dist do
+    setup_certificates(development: false)
+    setup_provisioning_profiles(development: false)
+  end
+
+  desc "Setup all certificates and profiles"
+  lane :setup_all do
+    setup_dev
+    setup_dist
+  end
+
+  desc "Build for testing"
+  lane :build_for_testing do
+    clear_derived_data
+    
+    build_ios_app(
+      scheme: SCHEME,
+      destination: "platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0",
+      build_for_testing: true,
+      derived_data_path: "./DerivedData",
+      clean: true
+    )
+  end
+
+  desc "Run tests"
+  lane :test do
+    run_tests(
+      scheme: SCHEME,
+      destination: "platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0",
+      derived_data_path: "./DerivedData"
+    )
+  end
+
+  desc "Build and test"
+  lane :build_and_test do
+    build_for_testing
+    test
+  end
+
+  desc "Build for App Store"
+  lane :build_appstore do |options|
+    # Increment version if specified
+    if options[:version]
+      increment_version_number(version_number: options[:version])
+    end
+    
+    # Increment build number if specified or auto-generate
+    if options[:build]
+      increment_build_number(build_number: options[:build])
+    else
+      increment_build_number(build_number: Time.now.strftime("%Y%m%d%H%M"))
+    end
+    
+    # Setup certificates and profiles
+    setup_dist
+    
+    # Build archive
+    build_ios_app(
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: {
+        method: "app-store",
+        destination: "upload",
+        uploadBitcode: false,
+        uploadSymbols: true,
+        compileBitcode: false,
+        manageAppVersionAndBuildNumber: false,
+        teamID: ENV["APPLE_TEAM_ID"]
+      },
+      derived_data_path: "./DerivedData",
+      archive_path: "./Apex.xcarchive",
+      clean: true
+    )
+    
+    UI.success("✅ Successfully built for App Store!")
+  end
+
+  desc "Upload to TestFlight"
+  lane :upload_testflight do |options|
+    build_appstore(options)
+    
+    # Generate release notes
+    changelog = generate_release_notes
+    
+    # Upload to TestFlight
+    upload_to_testflight(
+      ipa: lane_context[SharedValues::IPA_OUTPUT_PATH],
+      changelog: changelog,
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      notify_external_testers: false,
+      groups: ["Internal Testers"]
+    )
+    
+    UI.success("🚀 Successfully uploaded to TestFlight!")
+    UI.message("📱 Build will be available for testing in 10-15 minutes")
+  end
+
+  desc "Deploy to App Store"
+  lane :deploy_appstore do |options|
+    build_appstore(options)
+    
+    # Upload to App Store
+    upload_to_app_store(
+      ipa: lane_context[SharedValues::IPA_OUTPUT_PATH],
+      submit_for_review: options[:submit] || false,
+      automatic_release: false,
+      force: true,
+      precheck_include_in_app_purchases: false
+    )
+    
+    if options[:submit]
+      UI.success("🏪 Successfully submitted to App Store for review!")
+    else
+      UI.success("📦 Successfully uploaded to App Store Connect!")
+      UI.message("💡 Use submit:true to automatically submit for review")
+    end
+  end
+
+  desc "Release pipeline"
+  lane :release do |options|
+    # Validate options
+    release_type = options[:type] || "testflight"
+    version = options[:version]
+    build = options[:build]
+    
+    UI.header("🚀 Starting release pipeline")
+    UI.message("Release type: #{release_type}")
+    UI.message("Version: #{version || 'current'}") 
+    UI.message("Build: #{build || 'auto-generated'}")
+    
+    # Run tests unless skipped
+    unless options[:skip_tests]
+      UI.header("🧪 Running tests")
+      build_and_test
+    end
+    
+    # Deploy based on type
+    case release_type
+    when "testflight"
+      upload_testflight(version: version, build: build)
+    when "appstore"
+      deploy_appstore(version: version, build: build, submit: options[:submit])
+    else
+      UI.user_error!("Invalid release type: #{release_type}")
+    end
+    
+    # Create git tag if version was updated
+    if version
+      create_git_tag(version: version)
+    end
+    
+    UI.success("✅ Release pipeline completed successfully!")
+  end
+
+  desc "Emergency release (skip tests)"
+  lane :emergency_release do |options|
+    options[:skip_tests] = true
+    release(options)
+  end
+
+  # Helper lanes
+  private_lane :setup_certificates do |options|
+    development = options[:development] || false
+    
+    if development
+      cert(development: true, team_id: ENV["APPLE_TEAM_ID"])
+    else
+      cert(development: false, team_id: ENV["APPLE_TEAM_ID"])
+    end
+  end
+
+  private_lane :setup_provisioning_profiles do |options|
+    development = options[:development] || false
+    
+    sigh(
+      app_identifier: APP_IDENTIFIER,
+      team_id: ENV["APPLE_TEAM_ID"],
+      development: development,
+      force: ENV["FORCE_REFRESH"] == "true"
+    )
+  end
+
+  private_lane :generate_release_notes do
+    # Get last tag
+    last_tag = last_git_tag rescue "HEAD~10"
+    
+    # Generate changelog from git commits
+    changelog = changelog_from_git_commits(
+      between: [last_tag, "HEAD"],
+      pretty: "- %s",
+      date_format: "short",
+      match_lightweight_tag: false
+    )
+    
+    if changelog.strip.empty?
+      changelog = "• Bug fixes and improvements"
+    end
+    
+    changelog
+  end
+
+  private_lane :create_git_tag do |options|
+    version = options[:version]
+    tag = "v#{version}"
+    
+    # Check if tag already exists
+    if git_tag_exists(tag: tag)
+      UI.message("Tag #{tag} already exists, skipping creation")
+      return
+    end
+    
+    # Create tag
+    add_git_tag(
+      tag: tag,
+      message: "Release #{version}\n\nBuild: #{get_build_number}"
+    )
+    
+    UI.success("Created git tag: #{tag}")
+  end
+
+  # Error handling
+  error do |lane, exception|
+    UI.error("❌ Lane #{lane} failed with exception:")
+    UI.error(exception.message)
+    
+    # Clean up on failure
+    clear_derived_data if File.exist?("./DerivedData")
+    
+    # Notify if needed (could integrate with Slack, etc.)
+  end
+
+  after_all do |lane|
+    UI.success("✅ Lane #{lane} completed successfully!")
+    
+    # Clean up
+    if lane.to_s.include?("build") && File.exist?("./DerivedData")
+      FileUtils.rm_rf("./DerivedData")
+      UI.message("🧹 Cleaned up derived data")
+    end
+  end
+end
