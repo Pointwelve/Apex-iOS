@@ -1,0 +1,180 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v44
+      with:
+        files: |
+          Apex/**/*.swift
+          Apex/**/*.h
+          Apex/**/*.m
+          Apex/**/*.mm
+          **/*.yml
+          **/*.yaml
+          **/*.json
+          **/*.md
+        separator: ","
+
+    - name: Setup Claude Code
+      if: steps.changed-files.outputs.any_changed == 'true'
+      run: |
+        # Download and install Claude Code CLI
+        curl -fsSL https://claude.ai/cli/install.sh | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    - name: Run Claude Code Review
+      if: steps.changed-files.outputs.any_changed == 'true'
+      id: claude-review
+      run: |
+        echo "## 🤖 Claude Code Review" > review.md
+        echo "" >> review.md
+        echo "**Files reviewed:** ${{ steps.changed-files.outputs.all_changed_files }}" >> review.md
+        echo "" >> review.md
+        
+        # Create a comprehensive review prompt
+        cat > review_prompt.md << 'EOF'
+        Please perform a comprehensive code review of the changed files in this iOS Swift project. Focus on:
+
+        ## Code Quality & Best Practices
+        - Swift coding conventions and idioms
+        - iOS/SwiftUI best practices
+        - Memory management and retain cycles
+        - Performance considerations
+        - Thread safety and concurrency
+
+        ## Architecture & Design
+        - SOLID principles adherence
+        - Separation of concerns
+        - Proper use of SwiftUI patterns
+        - View composition and reusability
+
+        ## Security & Safety
+        - Potential security vulnerabilities
+        - Force unwrapping and crash risks
+        - Input validation
+        - Data handling practices
+
+        ## Testing & Maintainability
+        - Code testability
+        - Error handling
+        - Code readability and documentation
+        - Potential refactoring opportunities
+
+        Please provide:
+        1. Overall assessment summary
+        2. Specific issues found with line references
+        3. Positive aspects worth highlighting
+        4. Actionable recommendations
+        5. Priority level for each issue (Critical/High/Medium/Low)
+
+        Format your response in markdown with clear sections and code snippets where relevant.
+        EOF
+
+        # Run Claude Code review on changed files
+        claude-code --prompt "$(cat review_prompt.md)" \
+          --files "${{ steps.changed-files.outputs.all_changed_files }}" \
+          --output review_output.md || echo "Claude review failed, continuing..."
+
+        # Append Claude's review to our markdown file
+        if [ -f review_output.md ]; then
+          echo "" >> review.md
+          cat review_output.md >> review.md
+        else
+          echo "⚠️ Claude Code review could not be completed. Please check the configuration." >> review.md
+        fi
+
+        # Add footer
+        echo "" >> review.md
+        echo "---" >> review.md
+        echo "*This review was generated automatically by Claude Code. Please use this as guidance alongside human review.*" >> review.md
+        
+        # Set output for next step
+        echo "review_generated=true" >> $GITHUB_OUTPUT
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    - name: Comment PR with Review
+      if: steps.claude-review.outputs.review_generated == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          // Read the review content
+          let reviewContent = '';
+          try {
+            reviewContent = fs.readFileSync('review.md', 'utf8');
+          } catch (error) {
+            console.log('Could not read review file:', error);
+            reviewContent = '⚠️ Could not generate automated review.';
+          }
+
+          // Find existing Claude review comment
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existingComment = comments.data.find(comment => 
+            comment.user.login === 'github-actions[bot]' && 
+            comment.body.includes('🤖 Claude Code Review')
+          );
+
+          if (existingComment) {
+            // Update existing comment
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: reviewContent
+            });
+          } else {
+            // Create new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: reviewContent
+            });
+          }
+
+    - name: Upload review artifacts
+      if: steps.claude-review.outputs.review_generated == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: claude-review-${{ github.event.pull_request.number }}
+        path: |
+          review.md
+          review_output.md
+        retention-days: 30
+
+    - name: Summary
+      if: steps.changed-files.outputs.any_changed != 'true'
+      run: |
+        echo "## ℹ️ No reviewable files changed" >> $GITHUB_STEP_SUMMARY
+        echo "This PR doesn't contain changes to Swift, header, or configuration files that require code review." >> $GITHUB_STEP_SUMMARY

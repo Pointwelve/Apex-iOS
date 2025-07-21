@@ -1,0 +1,49 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Select Xcode 16.4
+      run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
+    
+    - name: Xcode version
+      run: /usr/bin/xcodebuild -version
+    
+    - name: Install SwiftLint
+      run: brew install swiftlint
+    
+    - name: SwiftLint
+      run: swiftlint --strict
+    
+    - name: Build
+      run: |
+        cd Apex
+        xcodebuild -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+          build
+    
+    - name: Test
+      run: |
+        cd Apex
+        xcodebuild test -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+          -resultBundlePath TestResults
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: Apex/TestResults
