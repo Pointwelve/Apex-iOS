@@ -151,6 +151,7 @@ This is a SwiftUI application with:
 - Enterprise-grade CI/CD pipeline
 - Automated release and deployment processes
 - Comprehensive testing and code quality enforcement
+- **Multi-language localization architecture** with type-safe string management
 
 ## Development Best Practices
 
@@ -247,3 +248,36 @@ swiftlint --strict
 - TestFlight distribution status and crash reports
 
 For complete release documentation, see `docs/RELEASE_GUIDE.md`
+
+## Localization
+
+**Architecture**: Type-safe localization with centralized string management supporting English, Spanish, French, German, and Japanese.
+
+**Core Files**:
+- `Apex/Apex/Localization/LocalizationManager.swift` - Central manager with ObservableObject
+- `Apex/Apex/Localization/LocalizationExtensions.swift` - SwiftUI extensions 
+- `Apex/Apex/Localizable.strings` - Base English strings
+
+**Usage**:
+```swift
+Text(.helloWorld)                    // Type-safe enum key
+"custom_key".localized               // String extension
+Text(.welcome).withLocalization()    // Auto-updates on language change
+```
+
+**Adding Languages**:
+1. Add to `SupportedLanguage` enum
+2. Create `xx.lproj/Localizable.strings` 
+3. Configure in Xcode project settings
+4. Update `supportedLanguages` array
+
+**Commands**:
+```bash
+# Validate strings files
+plutil -lint Apex/Apex/*/Localizable.strings
+
+# Test with Spanish
+xcrun simctl spawn "iPhone 16 Pro" defaults write com.apple.Simulator AppleLanguages -array es
+```
+
+See `docs/LOCALIZATION_GUIDE.md` for complete implementation details.

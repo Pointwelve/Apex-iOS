@@ -1,15 +1,16 @@
 # Apex iOS
 
-[![iOS CI](https://github.com/Pointwelve/Apex-iOS/actions/workflows/ios.yml/badge.svg)](https://github.com/Pointwelve/Apex-iOS/actions/workflows/ios.yml)
+[![iOS Build & Test](https://github.com/Pointwelve/Apex-iOS/actions/workflows/ios.yml/badge.svg)](https://github.com/Pointwelve/Apex-iOS/actions/workflows/ios.yml)
 [![Claude Code Review](https://github.com/Pointwelve/Apex-iOS/actions/workflows/claude-review.yml/badge.svg)](https://github.com/Pointwelve/Apex-iOS/actions/workflows/claude-review.yml)
 [![Release](https://github.com/Pointwelve/Apex-iOS/actions/workflows/release.yml/badge.svg)](https://github.com/Pointwelve/Apex-iOS/actions/workflows/release.yml)
 
-A modern iOS application built with SwiftUI and Swift 6.0, featuring automated CI/CD, AI-powered code reviews, and enterprise-grade release automation.
+A modern iOS app with SwiftUI, Swift 6.0, multi-language support, automated CI/CD, AI code reviews, and enterprise release automation.
 
 ## 🚀 Features
 
 - **SwiftUI Interface**: Modern declarative UI framework
 - **Swift 6.0**: Latest Swift language features and improvements
+- **Multi-Language Support**: Comprehensive localization architecture with type-safe string management
 - **Automated CI/CD**: GitHub Actions for building, testing, and deployment
 - **AI Code Reviews**: Claude Code integration for automated code analysis
 - **Code Quality**: SwiftLint integration for consistent code style
@@ -44,6 +45,11 @@ Apex/
 ├── Apex/                          # Main application
 │   ├── ApexApp.swift             # App entry point
 │   ├── ContentView.swift         # Main view
+│   ├── Localizable.strings       # Base localization (English)
+│   ├── Localization/             # Localization architecture
+│   │   ├── LocalizationManager.swift     # Central localization manager
+│   │   ├── LocalizationExtensions.swift  # SwiftUI extensions & helpers
+│   │   └── README.md             # Localization implementation guide
 │   ├── Assets.xcassets/          # App assets
 │   └── Apex.entitlements         # App capabilities
 ├── ApexTests/                     # Unit tests
@@ -64,7 +70,8 @@ Apex/
 ├── scripts/                      # Utility scripts
 │   └── version-bump.sh          # Version management
 ├── docs/                         # Documentation
-│   └── RELEASE_GUIDE.md         # Release process guide
+│   ├── RELEASE_GUIDE.md         # Release process guide
+│   └── LOCALIZATION_GUIDE.md    # Comprehensive localization guide
 └── .swiftlint.yml               # Code quality rules
 ```
 
@@ -158,12 +165,14 @@ swiftlint --strict
 
 ### GitHub Actions Workflows
 
-1. **iOS CI** (`.github/workflows/ios.yml`)
+1. **iOS Build & Test** (`.github/workflows/ios.yml`)
+   - Triggers on push to main/develop branches
    - Builds project on macOS 15 with Xcode 16.4
    - Runs SwiftLint for code quality
-   - Executes unit and UI tests with parallel execution
+   - Smart test optimization - runs only affected tests
    - Advanced caching for 40% faster builds
    - Uses iPhone 16 Pro simulator
+   - **No deployment** - build and test only
 
 2. **Claude Code Review** (`.github/workflows/claude-review.yml`)
    - Automated AI code reviews on pull requests
@@ -172,12 +181,13 @@ swiftlint --strict
    - Focuses on critical security and performance issues
    - Posts detailed review comments
 
-3. **Release Automation** (`.github/workflows/release.yml`)
+3. **Release to TestFlight & App Store** (`.github/workflows/release.yml`)
+   - **Manual workflow dispatch only** or git tags
    - Automated TestFlight and App Store deployment
    - Semantic versioning with automated build numbers
    - Release notes generation from git commits
    - Code signing and certificate management
-   - Multiple trigger methods (push, tags, manual)
+   - Conservative testing approach for releases
 
 4. **Certificate Management** (`.github/workflows/setup-certificates.yml`)
    - Automated iOS certificate and provisioning profile setup
@@ -236,19 +246,26 @@ The project uses comprehensive SwiftLint rules (`.swiftlint.yml`) including:
 3. **Test failures**: Check simulator selection (iPhone 16 Pro)
 4. **Claude review not working**: Verify `ANTHROPIC_API_KEY` secret
 
-### Getting Help
+### Documentation
 
-- Check [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) for complete release process
-- Review [CLAUDE.md](CLAUDE.md) for Claude Code development guidance
-- See `.github/workflows/` for CI/CD pipeline details
-- Create an issue for bugs or feature requests
+- **Development**: [CLAUDE.md](CLAUDE.md) - Claude Code guidance
+- **Release Process**: [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) - Complete release workflow  
+- **Localization**: [docs/LOCALIZATION_GUIDE.md](docs/LOCALIZATION_GUIDE.md) - Multi-language setup
+- **CI/CD Workflows**: `.github/workflows/` directory
 
 ### Release Process
 
-1. **TestFlight Release**: Push to main or use GitHub Actions manual dispatch
+**Main/Develop Branches**: Build and test only - no deployment
+1. Push changes to main/develop triggers iOS Build & Test workflow
+2. Smart test optimization runs only relevant tests
+3. No automatic releases or deployments
+
+**Explicit Releases Only**: 
+1. **TestFlight Release**: Use GitHub Actions manual workflow dispatch
 2. **App Store Release**: Use manual workflow dispatch with `appstore` option
-3. **Version Management**: Use `scripts/version-bump.sh` for local version control
-4. **Emergency Releases**: Skip tests option available for critical fixes
+3. **Tag-based Release**: Push git tags (v1.0.0) for automated releases
+4. **Version Management**: Use `scripts/version-bump.sh` for local version control
+5. **Emergency Releases**: Skip tests option available for critical fixes
 
 See [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) for detailed instructions.
 
