@@ -1,4 +1,4 @@
-name: iOS CI
+name: iOS Build & Test
 
 on:
   push:
@@ -60,19 +60,104 @@ jobs:
         path: swiftlint-results.json
         retention-days: 7
 
+  test-impact-analysis:
+    runs-on: macos-15
+    outputs:
+      should_run_tests: ${{ steps.analyze.outputs.should_run_tests }}
+      test_targets: ${{ steps.analyze.outputs.test_targets }}
+      test_strategy: ${{ steps.analyze.outputs.test_strategy }}
+      changed_files_count: ${{ steps.analyze.outputs.changed_files_count }}
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install pyyaml || echo "PyYAML installation failed, will fallback to running all tests"
+    
+    - name: Analyze test impact
+      id: analyze
+      run: |
+        chmod +x scripts/test-impact-analysis.sh
+        
+        # Run test impact analysis
+        result=$(./scripts/test-impact-analysis.sh analyze --verbose)
+        echo "Analysis result: $result"
+        
+        # Parse the result and set outputs
+        if [[ "$result" == "NO_CHANGES" ]]; then
+          echo "should_run_tests=false" >> $GITHUB_OUTPUT
+          echo "test_strategy=skip" >> $GITHUB_OUTPUT
+          echo "changed_files_count=0" >> $GITHUB_OUTPUT
+        elif [[ "$result" == "SKIP_TESTS" ]]; then
+          echo "should_run_tests=false" >> $GITHUB_OUTPUT
+          echo "test_strategy=skip-docs-only" >> $GITHUB_OUTPUT
+          echo "changed_files_count=1" >> $GITHUB_OUTPUT
+        elif [[ "$result" == "RUN_ALL_TESTS" ]]; then
+          echo "should_run_tests=true" >> $GITHUB_OUTPUT
+          echo "test_targets=ApexTests,ApexUITests" >> $GITHUB_OUTPUT
+          echo "test_strategy=full" >> $GITHUB_OUTPUT
+          # Count changed files for reporting
+          changed_count=$(git diff --name-only HEAD~1 HEAD | wc -l)
+          echo "changed_files_count=$changed_count" >> $GITHUB_OUTPUT
+        elif [[ "$result" == TESTS=* ]]; then
+          echo "should_run_tests=true" >> $GITHUB_OUTPUT
+          targets=$(echo "$result" | sed 's/TESTS=//')
+          echo "test_targets=$targets" >> $GITHUB_OUTPUT
+          echo "test_strategy=targeted" >> $GITHUB_OUTPUT
+          # Count changed files for reporting
+          changed_count=$(git diff --name-only HEAD~1 HEAD | wc -l)
+          echo "changed_files_count=$changed_count" >> $GITHUB_OUTPUT
+        else
+          # Fallback to running all tests
+          echo "should_run_tests=true" >> $GITHUB_OUTPUT
+          echo "test_targets=ApexTests,ApexUITests" >> $GITHUB_OUTPUT
+          echo "test_strategy=fallback" >> $GITHUB_OUTPUT
+          echo "changed_files_count=unknown" >> $GITHUB_OUTPUT
+        fi
+        
+        # Generate summary for workflow
+        echo "## 🧪 Test Impact Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        case "$(echo "$result" | head -1)" in
+          "NO_CHANGES")
+            echo "**Result:** No changes detected - tests will be skipped" >> $GITHUB_STEP_SUMMARY
+            ;;
+          "SKIP_TESTS")
+            echo "**Result:** Only documentation files changed - tests will be skipped" >> $GITHUB_STEP_SUMMARY
+            ;;
+          "RUN_ALL_TESTS")
+            echo "**Result:** Significant changes detected - running all tests" >> $GITHUB_STEP_SUMMARY
+            echo "**Targets:** Unit tests + UI tests" >> $GITHUB_STEP_SUMMARY
+            ;;
+          TESTS=*)
+            targets=$(echo "$result" | head -1 | sed 's/TESTS=//')
+            echo "**Result:** Targeted testing based on file analysis" >> $GITHUB_STEP_SUMMARY
+            echo "**Targets:** $targets" >> $GITHUB_STEP_SUMMARY
+            ;;
+          *)
+            echo "**Result:** Fallback to running all tests" >> $GITHUB_STEP_SUMMARY
+            ;;
+        esac
+
   build-and-test:
     runs-on: macos-15
-    needs: [lint]
-    if: always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+    needs: [lint, test-impact-analysis]
+    if: |
+      always() && 
+      (needs.lint.result == 'success' || needs.lint.result == 'skipped') &&
+      needs.test-impact-analysis.outputs.should_run_tests == 'true'
     timeout-minutes: 30
     
     strategy:
       matrix:
         destination: 
           - 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0'
-        include:
-          - destination: 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0'
-            test-plan: 'AllTests'
     
     steps:
     - name: Checkout code
@@ -85,6 +170,14 @@ jobs:
       run: |
         /usr/bin/xcodebuild -version
         /usr/bin/xcodebuild -showsdks
+    
+    - name: Cache Ruby gems
+      uses: actions/cache@v4
+      with:
+        path: ~/.gem
+        key: ${{ runner.os }}-gems-${{ hashFiles('**/Gemfile.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-gems-
     
     - name: Install xcpretty
       run: |
@@ -99,7 +192,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/Library/Developer/Xcode/DerivedData
-        key: ${{ runner.os }}-deriveddata-${{ github.sha }}
+        key: ${{ runner.os }}-deriveddata-${{ hashFiles('Apex/**/*.swift', 'Apex/**/*.plist', 'Apex/**/*.xcconfig', 'Apex/**/project.pbxproj') }}
         restore-keys: |
           ${{ runner.os }}-deriveddata-
     
@@ -109,13 +202,18 @@ jobs:
         path: |
           Apex/.build
           ~/Library/Caches/org.swift.swiftpm
-        key: ${{ runner.os }}-spm-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}
+          ~/.swiftpm/cache
+          ~/Library/org.swift.swiftpm
+        key: ${{ runner.os }}-spm-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}-v2
         restore-keys: |
           ${{ runner.os }}-spm-
+          ${{ runner.os }}-spm-v2-
     
     - name: Build for testing
       run: |
         cd Apex
+        
+        # Use aggressive build optimization
         set -o pipefail && xcodebuild \
           -project Apex.xcodeproj \
           -scheme Apex \
@@ -123,28 +221,92 @@ jobs:
           -derivedDataPath ./DerivedData \
           -clonedSourcePackagesDirPath ./DerivedData/SourcePackages \
           -resultBundlePath ./BuildResults \
-          build-for-testing | xcpretty
-    
-    - name: Run tests
-      run: |
-        cd Apex
-        set -o pipefail && xcodebuild \
-          -project Apex.xcodeproj \
-          -scheme Apex \
-          -destination '${{ matrix.destination }}' \
-          -derivedDataPath ./DerivedData \
-          -resultBundlePath ./TestResults \
+          -parallelizeTargets \
           -parallel-testing-enabled YES \
           -maximum-parallel-testing-workers auto \
-          test-without-building | xcpretty
+          -disable-concurrent-destination-testing \
+          BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
+          COMPILER_INDEX_STORE_ENABLE=NO \
+          build-for-testing | xcpretty
+    
+    - name: Run targeted tests
+      run: |
+        cd Apex
+        
+        # Get test targets from analysis
+        test_targets="${{ needs.test-impact-analysis.outputs.test_targets }}"
+        test_strategy="${{ needs.test-impact-analysis.outputs.test_strategy }}"
+        
+        echo "🎯 Test Strategy: $test_strategy"
+        echo "📋 Test Targets: $test_targets"
+        
+        # Generate and run test commands based on strategy
+        if [[ "$test_strategy" == "full" ]] || [[ "$test_strategy" == "fallback" ]]; then
+          echo "Running all tests..."
+          set -o pipefail && xcodebuild \
+            -project Apex.xcodeproj \
+            -scheme Apex \
+            -destination '${{ matrix.destination }}' \
+            -derivedDataPath ./DerivedData \
+            -resultBundlePath ./TestResults \
+            -parallel-testing-enabled YES \
+            -maximum-parallel-testing-workers auto \
+            test-without-building | xcpretty
+        elif [[ "$test_strategy" == "targeted" ]]; then
+          echo "Running targeted tests: $test_targets"
+          
+          # Convert comma-separated targets to array and run each
+          IFS=',' read -ra TARGETS <<< "$test_targets"
+          test_failed=false
+          
+          for target in "${TARGETS[@]}"; do
+            echo "🔬 Running tests for target: $target"
+            
+            if ! set -o pipefail && xcodebuild \
+              -project Apex.xcodeproj \
+              -scheme Apex \
+              -destination '${{ matrix.destination }}' \
+              -derivedDataPath ./DerivedData \
+              -resultBundlePath ./TestResults-$target \
+              -parallel-testing-enabled YES \
+              -maximum-parallel-testing-workers auto \
+              -only-testing:$target \
+              test-without-building | xcpretty; then
+              test_failed=true
+              echo "❌ Tests failed for target: $target"
+            else
+              echo "✅ Tests passed for target: $target"
+            fi
+          done
+          
+          # Combine test results
+          mkdir -p ./TestResults
+          find . -name "TestResults-*" -type d -exec cp -r {} ./TestResults/ \;
+          
+          if [[ "$test_failed" == "true" ]]; then
+            echo "❌ Some targeted tests failed"
+            exit 1
+          fi
+        else
+          echo "⚠️ Unknown test strategy: $test_strategy, running all tests as fallback"
+          set -o pipefail && xcodebuild \
+            -project Apex.xcodeproj \
+            -scheme Apex \
+            -destination '${{ matrix.destination }}' \
+            -derivedDataPath ./DerivedData \
+            -resultBundlePath ./TestResults \
+            -parallel-testing-enabled YES \
+            -maximum-parallel-testing-workers auto \
+            test-without-building | xcpretty
+        fi
     
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results-${{ strategy.job-index }}
+        name: test-results-${{ needs.test-impact-analysis.outputs.test_strategy }}-${{ strategy.job-index }}
         path: |
-          Apex/TestResults
+          Apex/TestResults*
           Apex/BuildResults
         retention-days: 14
     
@@ -159,6 +321,75 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-summary-${{ strategy.job-index }}
+        name: test-summary-${{ needs.test-impact-analysis.outputs.test_strategy }}-${{ strategy.job-index }}
         path: test-summary.json
         retention-days: 14
+    
+    - name: Generate test optimization report
+      if: always()
+      run: |
+        echo "## 📊 Test Execution Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Strategy:** ${{ needs.test-impact-analysis.outputs.test_strategy }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Targets:** ${{ needs.test-impact-analysis.outputs.test_targets }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Changed Files:** ${{ needs.test-impact-analysis.outputs.changed_files_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Calculate time savings (estimated)
+        case "${{ needs.test-impact-analysis.outputs.test_strategy }}" in
+          "targeted")
+            target_count=$(echo "${{ needs.test-impact-analysis.outputs.test_targets }}" | tr ',' '\n' | wc -l)
+            if [[ $target_count -eq 1 ]]; then
+              echo "⚡ **Estimated Time Savings:** ~50% (running 1 test suite instead of 2)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "ℹ️  **Time Savings:** Minimal (running all test suites)" >> $GITHUB_STEP_SUMMARY
+            fi
+            ;;
+          "skip")
+            echo "⚡ **Time Savings:** ~100% (tests skipped - no relevant changes)" >> $GITHUB_STEP_SUMMARY
+            ;;
+          "skip-docs-only")
+            echo "⚡ **Time Savings:** ~100% (tests skipped - documentation changes only)" >> $GITHUB_STEP_SUMMARY
+            ;;
+          "full")
+            echo "ℹ️  **Time Savings:** None (significant changes require full testing)" >> $GITHUB_STEP_SUMMARY
+            ;;
+          "fallback")
+            echo "⚠️  **Time Savings:** None (fallback to full testing for safety)" >> $GITHUB_STEP_SUMMARY
+            ;;
+        esac
+
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: [test-impact-analysis, build-and-test]
+    if: always()
+    
+    steps:
+    - name: Generate final summary
+      run: |
+        echo "## 🏁 Build & Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Test impact analysis results
+        if [[ "${{ needs.test-impact-analysis.outputs.should_run_tests }}" == "false" ]]; then
+          echo "✅ **Tests:** Skipped (no relevant changes)" >> $GITHUB_STEP_SUMMARY
+          echo "⚡ **Performance:** Optimized - saved ~5-10 minutes" >> $GITHUB_STEP_SUMMARY
+        elif [[ "${{ needs.build-and-test.result }}" == "success" ]]; then
+          echo "✅ **Tests:** Passed (${{ needs.test-impact-analysis.outputs.test_strategy }} strategy)" >> $GITHUB_STEP_SUMMARY
+        elif [[ "${{ needs.build-and-test.result }}" == "failure" ]]; then
+          echo "❌ **Tests:** Failed (${{ needs.test-impact-analysis.outputs.test_strategy }} strategy)" >> $GITHUB_STEP_SUMMARY
+        elif [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
+          echo "⏭️  **Tests:** Skipped" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Impact Analysis:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Changed files: ${{ needs.test-impact-analysis.outputs.changed_files_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Test strategy: ${{ needs.test-impact-analysis.outputs.test_strategy }}" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "${{ needs.test-impact-analysis.outputs.test_targets }}" != "" ]]; then
+          echo "- Test targets: ${{ needs.test-impact-analysis.outputs.test_targets }}" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**📝 Note:** This pipeline only builds and tests. For releases, use the 'Release to TestFlight & App Store' workflow." >> $GITHUB_STEP_SUMMARY

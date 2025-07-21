@@ -2,7 +2,6 @@ name: Release to TestFlight & App Store
 
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
@@ -61,7 +60,7 @@ jobs:
         # Get current version from Info.plist
         current_version=$(plutil -p Apex/Apex/Info.plist | grep CFBundleShortVersionString | awk '{print $3}' | tr -d '"')
         
-        # Determine if this is a tag-based release
+        # Determine if this is a tag-based or manual release
         if [[ "${{ github.ref }}" == refs/tags/* ]]; then
           tag_version=$(echo "${{ github.ref }}" | sed 's/refs\/tags\/v//')
           echo "Tag-based release: $tag_version"
@@ -85,26 +84,9 @@ jobs:
             echo "new_version=$current_version" >> $GITHUB_OUTPUT
           fi
         else
-          # Check if there are significant changes since last release
-          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$last_tag" ]; then
-            commits_since_release=$(git rev-list ${last_tag}..HEAD --count)
-            if [ $commits_since_release -gt 0 ]; then
-              # Auto-patch version bump for main branch
-              IFS='.' read -r major minor patch <<< "$current_version"
-              new_version="$major.$minor.$((patch + 1))"
-              echo "Auto-release with patch bump: $new_version"
-              echo "should_release=true" >> $GITHUB_OUTPUT
-              echo "new_version=$new_version" >> $GITHUB_OUTPUT
-            else
-              echo "No commits since last release"
-              echo "should_release=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "First release: $current_version"
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "new_version=$current_version" >> $GITHUB_OUTPUT
-          fi
+          # This should not happen as we only trigger on tags and manual dispatch
+          echo "Unexpected trigger - no release will be created"
+          echo "should_release=false" >> $GITHUB_OUTPUT
         fi
         
         # Generate build number (timestamp-based)
@@ -163,17 +145,22 @@ jobs:
     - name: Select Xcode
       run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
     
-    - name: Cache dependencies
+    - name: Cache build dependencies
       uses: actions/cache@v4
       with:
         path: |
           ~/Library/Developer/Xcode/DerivedData
           Apex/.build
           ~/Library/Caches/org.swift.swiftpm
-        key: ${{ runner.os }}-release-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}
+          ~/.swiftpm/cache
+          ~/Library/org.swift.swiftpm
+          ~/.gem
+        key: ${{ runner.os }}-release-${{ hashFiles('Apex/**/*.swift', 'Apex/**/*.plist', 'Apex/**/Package.swift', 'Apex/**/Package.resolved', '**/Gemfile.lock') }}-v2
         restore-keys: |
+          ${{ runner.os }}-release-v2-
           ${{ runner.os }}-release-
           ${{ runner.os }}-deriveddata-
+          ${{ runner.os }}-spm-
     
     - name: Install dependencies
       run: |
@@ -198,10 +185,30 @@ jobs:
         
         echo "Updated to version ${{ needs.version-check.outputs.new_version }} build ${{ needs.version-check.outputs.build_number }}"
     
-    - name: Build and test
+    - name: Analyze test impact for release
       if: ${{ !inputs.skip_tests }}
+      id: test-analysis
+      run: |
+        chmod +x scripts/test-impact-analysis.sh
+        
+        # For releases, we're more conservative - run all tests unless only docs changed
+        result=$(./scripts/test-impact-analysis.sh analyze)
+        
+        if [[ "$result" == "SKIP_TESTS" ]]; then
+          echo "should_run_tests=false" >> $GITHUB_OUTPUT
+          echo "test_strategy=skip-docs-only" >> $GITHUB_OUTPUT
+        else
+          echo "should_run_tests=true" >> $GITHUB_OUTPUT
+          echo "test_strategy=full" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "Release test strategy: $(echo $result | head -1)"
+    
+    - name: Build and test
+      if: ${{ !inputs.skip_tests && steps.test-analysis.outputs.should_run_tests == 'true' }}
       run: |
         cd Apex
+        echo "🧪 Running full test suite for release validation"
         set -o pipefail && xcodebuild \
           -project Apex.xcodeproj \
           -scheme Apex \
@@ -210,9 +217,19 @@ jobs:
           -resultBundlePath ./TestResults \
           clean test | xcpretty
     
+    - name: Skip tests notification
+      if: ${{ !inputs.skip_tests && steps.test-analysis.outputs.should_run_tests == 'false' }}
+      run: |
+        echo "⚡ Tests skipped for release - only documentation files changed"
+        echo "## 🚀 Release Tests" >> $GITHUB_STEP_SUMMARY
+        echo "Tests were skipped as only documentation files changed." >> $GITHUB_STEP_SUMMARY
+        echo "This is safe for release as no code changes were detected." >> $GITHUB_STEP_SUMMARY
+    
     - name: Archive for distribution
       run: |
         cd Apex
+        
+        # Use optimized build settings for release
         set -o pipefail && xcodebuild \
           -project Apex.xcodeproj \
           -scheme Apex \
@@ -220,6 +237,11 @@ jobs:
           -archivePath ./Apex.xcarchive \
           -derivedDataPath ./DerivedData \
           -configuration Release \
+          -parallelizeTargets \
+          COMPILER_INDEX_STORE_ENABLE=NO \
+          BUILD_LIBRARY_FOR_DISTRIBUTION=NO \
+          SWIFT_COMPILATION_MODE=wholemodule \
+          SWIFT_OPTIMIZATION_LEVEL=-O \
           archive | xcpretty
     
     - name: Upload build artifacts

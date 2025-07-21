@@ -1,0 +1,445 @@
+name: Performance Monitoring
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Apex/**/*.swift'
+      - 'Apex/**/*.plist'
+      - '.github/workflows/performance-monitoring.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Apex/**/*.swift'
+      - 'Apex/**/*.plist'
+      - '.github/workflows/performance-monitoring.yml'
+  schedule:
+    # Run performance monitoring twice per week
+    - cron: '0 10 * * 2,5'  # Tuesday and Friday at 10 AM UTC
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODE_VERSION: "16.4"
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
+jobs:
+  build-performance:
+    runs-on: macos-15
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2  # Need previous commit for comparison
+    
+    - name: Select Xcode
+      run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
+    
+    - name: Cache performance data
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Developer/Xcode/DerivedData
+          performance-data
+        key: ${{ runner.os }}-perf-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-perf-
+    
+    - name: Install performance monitoring tools
+      run: |
+        # Install xcpretty for build output parsing
+        gem install xcpretty
+        
+        # Create performance data directory
+        mkdir -p performance-data
+    
+    - name: Measure clean build performance
+      id: clean-build
+      run: |
+        cd Apex
+        
+        echo "🏗️ Starting clean build performance test..."
+        
+        # Clean everything first
+        rm -rf ~/Library/Developer/Xcode/DerivedData/Apex-*
+        
+        # Measure clean build time
+        start_time=$(date +%s)
+        
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0' \
+          -derivedDataPath ./DerivedData \
+          -configuration Debug \
+          clean build | tee ../performance-data/build-log.txt | xcpretty
+        
+        end_time=$(date +%s)
+        build_time=$((end_time - start_time))
+        
+        echo "build_time_seconds=$build_time" >> $GITHUB_OUTPUT
+        echo "$build_time" > ../performance-data/clean-build-time.txt
+        
+        echo "⏱️ Clean build completed in ${build_time}s"
+    
+    - name: Measure incremental build performance
+      id: incremental-build
+      run: |
+        cd Apex
+        
+        echo "🔄 Starting incremental build performance test..."
+        
+        # Touch a file to trigger incremental build
+        touch Apex/ContentView.swift
+        
+        # Measure incremental build time
+        start_time=$(date +%s)
+        
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0' \
+          -derivedDataPath ./DerivedData \
+          -configuration Debug \
+          build | tee ../performance-data/incremental-build-log.txt | xcpretty
+        
+        end_time=$(date +%s)
+        incremental_time=$((end_time - start_time))
+        
+        echo "incremental_time_seconds=$incremental_time" >> $GITHUB_OUTPUT
+        echo "$incremental_time" > ../performance-data/incremental-build-time.txt
+        
+        echo "⚡ Incremental build completed in ${incremental_time}s"
+    
+    - name: Measure test execution performance
+      id: test-performance
+      run: |
+        cd Apex
+        
+        echo "🧪 Starting test performance measurement..."
+        
+        # Measure test execution time
+        start_time=$(date +%s)
+        
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
+          -scheme Apex \
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0' \
+          -derivedDataPath ./DerivedData \
+          -resultBundlePath ./TestResults \
+          test-without-building | tee ../performance-data/test-log.txt | xcpretty
+        
+        end_time=$(date +%s)
+        test_time=$((end_time - start_time))
+        
+        echo "test_time_seconds=$test_time" >> $GITHUB_OUTPUT
+        echo "$test_time" > ../performance-data/test-execution-time.txt
+        
+        echo "🏃 Tests completed in ${test_time}s"
+    
+    - name: Analyze build performance
+      run: |
+        echo "## ⚡ Build Performance Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        clean_time="${{ steps.clean-build.outputs.build_time_seconds }}"
+        incremental_time="${{ steps.incremental-build.outputs.incremental_time_seconds }}"
+        test_time="${{ steps.test-performance.outputs.test_time_seconds }}"
+        
+        echo "📊 **Performance Metrics:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Clean build: ${clean_time}s" >> $GITHUB_STEP_SUMMARY
+        echo "- Incremental build: ${incremental_time}s" >> $GITHUB_STEP_SUMMARY
+        echo "- Test execution: ${test_time}s" >> $GITHUB_STEP_SUMMARY
+        
+        # Calculate total workflow time
+        total_time=$((clean_time + incremental_time + test_time))
+        echo "- Total measured time: ${total_time}s" >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Performance benchmarks and recommendations
+        echo "🎯 **Performance Assessment:**" >> $GITHUB_STEP_SUMMARY
+        
+        # Clean build assessment
+        if [ "$clean_time" -lt 60 ]; then
+          echo "✅ **Clean Build:** Excellent (under 1 minute)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$clean_time" -lt 180 ]; then
+          echo "✅ **Clean Build:** Good (under 3 minutes)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$clean_time" -lt 300 ]; then
+          echo "⚠️  **Clean Build:** Acceptable (under 5 minutes)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Clean Build:** Slow (over 5 minutes - consider optimization)" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Incremental build assessment  
+        if [ "$incremental_time" -lt 10 ]; then
+          echo "✅ **Incremental Build:** Excellent (under 10 seconds)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$incremental_time" -lt 30 ]; then
+          echo "✅ **Incremental Build:** Good (under 30 seconds)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$incremental_time" -lt 60 ]; then
+          echo "⚠️  **Incremental Build:** Acceptable (under 1 minute)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Incremental Build:** Slow (over 1 minute)" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Test execution assessment
+        if [ "$test_time" -lt 30 ]; then
+          echo "✅ **Test Execution:** Fast (under 30 seconds)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$test_time" -lt 120 ]; then
+          echo "✅ **Test Execution:** Good (under 2 minutes)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️  **Test Execution:** Consider optimization or parallelization" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Store performance data for trending
+        echo "{
+          \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+          \"commit\": \"$GITHUB_SHA\",
+          \"clean_build_seconds\": $clean_time,
+          \"incremental_build_seconds\": $incremental_time,
+          \"test_execution_seconds\": $test_time,
+          \"total_seconds\": $total_time
+        }" > performance-data/performance-metrics.json
+    
+    - name: Compare with previous performance
+      run: |
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📈 **Performance Trends:**" >> $GITHUB_STEP_SUMMARY
+        
+        # Try to get previous performance data from cache
+        if [ -f "performance-data/previous-metrics.json" ]; then
+          prev_clean=$(jq '.clean_build_seconds' performance-data/previous-metrics.json)
+          prev_incremental=$(jq '.incremental_build_seconds' performance-data/previous-metrics.json)
+          prev_test=$(jq '.test_execution_seconds' performance-data/previous-metrics.json)
+          
+          current_clean="${{ steps.clean-build.outputs.build_time_seconds }}"
+          current_incremental="${{ steps.incremental-build.outputs.incremental_time_seconds }}"
+          current_test="${{ steps.test-performance.outputs.test_time_seconds }}"
+          
+          # Calculate deltas (using awk for floating point math)
+          clean_delta=$(awk "BEGIN {print $current_clean - $prev_clean}")
+          incremental_delta=$(awk "BEGIN {print $current_incremental - $prev_incremental}")
+          test_delta=$(awk "BEGIN {print $current_test - $prev_test}")
+          
+          echo "- Clean build: ${clean_delta}s change from previous" >> $GITHUB_STEP_SUMMARY
+          echo "- Incremental build: ${incremental_delta}s change from previous" >> $GITHUB_STEP_SUMMARY
+          echo "- Test execution: ${test_delta}s change from previous" >> $GITHUB_STEP_SUMMARY
+          
+          # Highlight significant changes
+          if awk "BEGIN {exit !($clean_delta > 30)}"; then
+            echo "⚠️  **Alert:** Clean build time increased significantly" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+        else
+          echo "- No previous performance data for comparison" >> $GITHUB_STEP_SUMMARY
+          echo "- This will be the new baseline for future comparisons" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Save current metrics as previous for next run
+        cp performance-data/performance-metrics.json performance-data/previous-metrics.json
+    
+    - name: Generate performance recommendations
+      run: |
+        clean_time="${{ steps.clean-build.outputs.build_time_seconds }}"
+        incremental_time="${{ steps.incremental-build.outputs.incremental_time_seconds }}"
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "💡 **Performance Optimization Recommendations:**" >> $GITHUB_STEP_SUMMARY
+        
+        # Provide specific recommendations based on performance
+        if [ "$clean_time" -gt 180 ]; then
+          echo "- Consider enabling build parallelization with -parallelizeTargets" >> $GITHUB_STEP_SUMMARY
+          echo "- Review dependencies and consider lazy loading" >> $GITHUB_STEP_SUMMARY
+          echo "- Use Whole Module Optimization for release builds" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "$incremental_time" -gt 30 ]; then
+          echo "- Check for excessive use of type inference - add explicit types" >> $GITHUB_STEP_SUMMARY
+          echo "- Review complex expressions that slow down compilation" >> $GITHUB_STEP_SUMMARY
+          echo "- Consider modularizing large files" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Always provide general recommendations
+        echo "- Use DerivedData caching in CI (already enabled)" >> $GITHUB_STEP_SUMMARY
+        echo "- Consider using Swift Package Manager for modularization" >> $GITHUB_STEP_SUMMARY
+        echo "- Monitor performance trends over time" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload performance artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-data-${{ github.sha }}
+        path: |
+          performance-data/
+          Apex/TestResults/
+        retention-days: 90
+
+  memory-analysis:
+    runs-on: macos-15
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Select Xcode
+      run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
+    
+    - name: Analyze project memory characteristics
+      run: |
+        echo "## 💾 Memory & Resource Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        cd Apex
+        
+        # Analyze source file sizes
+        echo "📁 **Source Code Analysis:**" >> $GITHUB_STEP_SUMMARY
+        
+        total_source_size=$(find . -name "*.swift" -exec stat -f%z {} \; | awk '{sum+=$1} END {print sum}')
+        source_files=$(find . -name "*.swift" | wc -l | tr -d ' ')
+        
+        # Convert bytes to KB
+        total_source_kb=$((total_source_size / 1024))
+        avg_file_size=$((total_source_size / source_files))
+        avg_file_kb=$((avg_file_size / 1024))
+        
+        echo "- Total Swift source: ${total_source_kb} KB across ${source_files} files" >> $GITHUB_STEP_SUMMARY
+        echo "- Average file size: ${avg_file_kb} KB" >> $GITHUB_STEP_SUMMARY
+        
+        # Find largest source files
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **Largest Source Files:**" >> $GITHUB_STEP_SUMMARY
+        find . -name "*.swift" -exec stat -f "%z %N" {} \; | sort -rn | head -5 | while read size path; do
+          size_kb=$((size / 1024))
+          echo "- $(basename "$path"): ${size_kb} KB" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        # Analyze assets
+        if [ -d "Assets.xcassets" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎨 **Asset Analysis:**" >> $GITHUB_STEP_SUMMARY
+          
+          asset_size=$(du -sk Assets.xcassets | cut -f1)
+          echo "- Assets bundle: ${asset_size} KB" >> $GITHUB_STEP_SUMMARY
+          
+          # Count different asset types
+          image_sets=$(find Assets.xcassets -name "*.imageset" | wc -l | tr -d ' ')
+          color_sets=$(find Assets.xcassets -name "*.colorset" | wc -l | tr -d ' ')
+          
+          echo "- Image sets: $image_sets" >> $GITHUB_STEP_SUMMARY
+          echo "- Color sets: $color_sets" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Estimate compiled size impact
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📱 **Estimated Build Impact:**" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$total_source_kb" -lt 500 ]; then
+          echo "✅ **Code Size:** Small project - minimal impact on app size" >> $GITHUB_STEP_SUMMARY
+        elif [ "$total_source_kb" -lt 2000 ]; then
+          echo "✅ **Code Size:** Medium project - reasonable impact on app size" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️  **Code Size:** Large project - consider code optimization techniques" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  workflow-efficiency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Analyze workflow efficiency
+      run: |
+        echo "## ⚙️ Workflow Efficiency Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Analyze GitHub Actions workflows
+        workflow_count=$(find .github/workflows -name "*.yml" -o -name "*.yaml" | wc -l)
+        echo "📋 **Workflow Configuration:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Total workflows: $workflow_count" >> $GITHUB_STEP_SUMMARY
+        
+        # List all workflows
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Active Workflows:**" >> $GITHUB_STEP_SUMMARY
+        find .github/workflows -name "*.yml" -o -name "*.yaml" | while read workflow; do
+          name=$(basename "$workflow" .yml)
+          echo "- $name" >> $GITHUB_STEP_SUMMARY
+        done
+        
+        # Analyze caching usage
+        cache_usage=$(grep -r "uses: actions/cache" .github/workflows/ | wc -l || echo "0")
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "💾 **Caching Strategy:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Cache steps found: $cache_usage" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$cache_usage" -gt 3 ]; then
+          echo "✅ **Assessment:** Good caching strategy implemented" >> $GITHUB_STEP_SUMMARY
+        elif [ "$cache_usage" -gt 0 ]; then
+          echo "⚠️  **Assessment:** Some caching in place - consider expanding" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Assessment:** No caching detected - significant optimization opportunity" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Analyze concurrency usage
+        concurrency_usage=$(grep -r "concurrency:" .github/workflows/ | wc -l || echo "0")
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🔄 **Concurrency Control:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Workflows with concurrency control: $concurrency_usage" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$concurrency_usage" -eq "$workflow_count" ]; then
+          echo "✅ **Assessment:** All workflows have concurrency control" >> $GITHUB_STEP_SUMMARY
+        elif [ "$concurrency_usage" -gt 0 ]; then
+          echo "⚠️  **Assessment:** Partial concurrency control - consider adding to all workflows" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Assessment:** No concurrency control - workflows may run unnecessarily" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  summary:
+    needs: [build-performance, memory-analysis, workflow-efficiency]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Generate performance summary
+      run: |
+        echo "## 🎯 Performance Monitoring Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check all job results
+        if [ "${{ needs.build-performance.result }}" == "success" ]; then
+          echo "✅ **Build Performance:** Monitoring completed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Build Performance:** Monitoring failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.memory-analysis.result }}" == "success" ]; then
+          echo "✅ **Memory Analysis:** Completed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Memory Analysis:** Failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.workflow-efficiency.result }}" == "success" ]; then
+          echo "✅ **Workflow Efficiency:** Analyzed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Workflow Efficiency:** Analysis failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Performance Monitoring Benefits:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Track build performance trends over time" >> $GITHUB_STEP_SUMMARY
+        echo "- Identify performance regressions early" >> $GITHUB_STEP_SUMMARY
+        echo "- Optimize CI/CD pipeline efficiency" >> $GITHUB_STEP_SUMMARY
+        echo "- Monitor resource usage and code growth" >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Review performance metrics for trends" >> $GITHUB_STEP_SUMMARY
+        echo "- Implement recommended optimizations" >> $GITHUB_STEP_SUMMARY
+        echo "- Monitor performance impact of new features" >> $GITHUB_STEP_SUMMARY
+        echo "- Consider setting up performance budgets" >> $GITHUB_STEP_SUMMARY

@@ -24,17 +24,26 @@ APP_STORE_CONNECT_ISSUER_ID      # API Issuer ID
 
 ## 🎯 Release Types
 
-### 1. TestFlight Release (Recommended)
-Best for beta testing and gradual rollouts.
+### Main/Develop Branch Strategy
+**Build and Test Only - No Deployment**
 
-**Automatic (Push to main):**
+Pushing to main or develop branches will:
 ```bash
 git checkout main
 git pull origin main
 # Make your changes
-git commit -m "feat: new feature implementation"
-git push origin main
+git commit -m "feat: new feature implementation" 
+git push origin main  # Only builds and tests - NO deployment
 ```
+
+This triggers the "iOS Build & Test" workflow which:
+- Runs smart test optimization
+- Builds the project
+- Validates code quality
+- **Does not deploy anywhere**
+
+### 1. TestFlight Release (Manual Only)
+Best for beta testing and gradual rollouts.
 
 **Manual (GitHub Actions):**
 1. Go to GitHub Actions
@@ -68,10 +77,11 @@ git push origin v1.2.0
 ## 🔧 Version Management
 
 ### Automated Versioning
-Our pipeline automatically increments versions based on:
-- **Push to main**: Patch increment (1.0.0 → 1.0.1)
+Release pipeline automatically increments versions based on:
 - **Manual dispatch**: Your choice (patch/minor/major)
 - **Git tags**: Uses tag version (v1.2.0 → 1.2.0)
+
+**Note**: Push to main/develop no longer triggers automatic releases - only build and test.
 
 ### Manual Versioning
 Use the provided script for local version management:

@@ -11,7 +11,7 @@ import Foundation
 // MARK: - String Extension for Localization
 extension String {
     /// Returns localized string using LocalizationManager
-    var localized: String {
+    @MainActor var localized: String {
         guard let key = LocalizationKey(rawValue: self) else {
             // swiftlint:disable:next nslocalizedstring_key
             return NSLocalizedString(self, comment: self)
@@ -20,6 +20,7 @@ extension String {
     }
 
     /// Returns localized string with format arguments
+    @MainActor
     func localized(with arguments: CVarArg...) -> String {
         guard let key = LocalizationKey(rawValue: self) else {
             // swiftlint:disable:next nslocalizedstring_key
@@ -32,11 +33,12 @@ extension String {
 // MARK: - LocalizationKey Extension
 extension LocalizationKey {
     /// Convenience property to get localized string
-    var localized: String {
+    @MainActor var localized: String {
         return LocalizationManager.shared.localizedString(for: self)
     }
 
     /// Returns localized string with format arguments
+    @MainActor
     func localized(with arguments: CVarArg...) -> String {
         return LocalizationManager.shared.localizedString(for: self, arguments: arguments)
     }
@@ -45,11 +47,13 @@ extension LocalizationKey {
 // MARK: - SwiftUI Text Extension
 extension Text {
     /// Creates Text view with localized string from key
+    @MainActor
     init(_ key: LocalizationKey) {
         self.init(key.localized)
     }
 
     /// Creates Text view with localized string and format arguments
+    @MainActor
     init(_ key: LocalizationKey, arguments: CVarArg...) {
         self.init(key.localized(with: arguments))
     }
@@ -57,7 +61,13 @@ extension Text {
 
 // MARK: - SwiftUI Environment Extension
 private struct LocalizationManagerKey: EnvironmentKey {
-    static let defaultValue = LocalizationManager.shared
+    typealias Value = LocalizationManager
+
+    static var defaultValue: LocalizationManager {
+        MainActor.assumeIsolated {
+            LocalizationManager.shared
+        }
+    }
 }
 
 extension EnvironmentValues {
@@ -122,7 +132,7 @@ struct LanguageSelectionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(LocalizationKey.done.localized) {
+                    Button("Done") {
                         dismiss()
                     }
                 }

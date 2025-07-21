@@ -1,0 +1,357 @@
+name: Security & Dependency Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Apex/**/*.swift'
+      - 'Apex/**/Package.swift'
+      - 'Apex/**/Package.resolved'
+      - '.github/workflows/dependency-scan.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Apex/**/*.swift'
+      - 'Apex/**/Package.swift'
+      - 'Apex/**/Package.resolved'
+      - '.github/workflows/dependency-scan.yml'
+  schedule:
+    # Run weekly security scan on Mondays at 9 AM UTC
+    - cron: '0 9 * * 1'
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODE_VERSION: "16.4"
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
+jobs:
+  dependency-analysis:
+    runs-on: macos-15
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Cache dependency analysis
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.swiftpm/cache
+          ~/Library/org.swift.swiftpm
+          ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-deps-analysis-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}-v1
+        restore-keys: |
+          ${{ runner.os }}-deps-analysis-
+    
+    - name: Select Xcode
+      run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
+    
+    - name: Install dependencies analysis tools
+      run: |
+        # Install Swift Package Manager dependency analysis tools
+        if ! command -v swift-outdated &> /dev/null; then
+          echo "Installing swift-outdated for dependency analysis"
+          # This tool doesn't exist yet - placeholder for when it's available
+          echo "Swift Package Manager dependency analysis will use built-in tools"
+        fi
+    
+    - name: Analyze Swift Package dependencies
+      id: swift-deps
+      run: |
+        cd Apex
+        echo "## 📦 Swift Package Dependencies Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "Package.swift" ]; then
+          echo "🔍 Analyzing Swift Package dependencies..."
+          
+          # Show package dependencies
+          swift package show-dependencies --format json > package-deps.json 2>/dev/null || true
+          
+          if [ -s package-deps.json ]; then
+            echo "📋 **Package Dependencies Found:**" >> $GITHUB_STEP_SUMMARY
+            jq -r '.dependencies[] | "- \(.identity): \(.requirement.range[0] // .requirement.revision[0:8] // "latest")"' package-deps.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️ **Package Dependencies:** None or analysis failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check for resolved dependencies
+          if [ -f "Package.resolved" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🔒 **Resolved Dependencies:**" >> $GITHUB_STEP_SUMMARY
+            jq -r '.pins[] | "- \(.identity): \(.state.version // .state.revision[0:8])"' Package.resolved >> $GITHUB_STEP_SUMMARY
+          fi
+          
+        else
+          echo "ℹ️ **Package Dependencies:** No Package.swift found - using CocoaPods/Carthage analysis" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for Podfile
+          if [ -f "Podfile" ]; then
+            echo "📱 Found Podfile - CocoaPods project" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "Cartfile" ]; then
+            echo "🛒 Found Cartfile - Carthage project" >> $GITHUB_STEP_SUMMARY  
+          else
+            echo "📦 No external dependencies detected" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+    
+    - name: Security vulnerability check
+      id: security-scan
+      run: |
+        echo "## 🔒 Security Analysis" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for common security issues in Swift code
+        echo "🛡️ Scanning for security vulnerabilities..."
+        
+        # Initialize security report
+        security_issues=0
+        
+        # Check for hardcoded secrets/keys
+        if grep -r -i -n --include="*.swift" --include="*.plist" \
+           -E "(api[_-]?key|secret|password|token|credential)" Apex/ \
+           | grep -v -E "(//|/\*|\*/|KeychainAccess|SecureStorage)" \
+           | head -5 > security_scan.txt; then
+          
+          if [ -s security_scan.txt ]; then
+            security_issues=$((security_issues + 1))
+            echo "⚠️  **Potential hardcoded secrets found:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat security_scan.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        # Check for insecure network calls
+        if grep -r -n --include="*.swift" "http://" Apex/ > http_calls.txt; then
+          if [ -s http_calls.txt ]; then
+            security_issues=$((security_issues + 1))
+            echo "⚠️  **Insecure HTTP calls found:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -10 http_calls.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        # Check for debugging code left in
+        if grep -r -n --include="*.swift" -E "(print\(|NSLog\(|debugPrint\()" Apex/ \
+           | grep -v -E "(//|/\*|\*/|#if DEBUG|os_log)" \
+           | head -5 > debug_code.txt; then
+          
+          if [ -s debug_code.txt ]; then
+            echo "ℹ️  **Debug code detected (review for production):**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat debug_code.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        # Summary
+        if [ $security_issues -eq 0 ]; then
+          echo "✅ **Security Scan:** No critical issues detected" >> $GITHUB_STEP_SUMMARY
+          echo "SECURITY_STATUS=clean" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️  **Security Scan:** $security_issues potential issues found" >> $GITHUB_STEP_SUMMARY
+          echo "SECURITY_STATUS=issues" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "security_issues=$security_issues" >> $GITHUB_OUTPUT
+    
+    - name: Dependency health check
+      id: health-check
+      run: |
+        echo "## 📊 Dependency Health Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        cd Apex
+        
+        # Check for Package.resolved to see if dependencies are locked
+        if [ -f "Package.resolved" ]; then
+          resolved_count=$(jq '.pins | length' Package.resolved 2>/dev/null || echo "0")
+          echo "🔒 **Resolved Dependencies:** $resolved_count packages locked" >> $GITHUB_STEP_SUMMARY
+          
+          # Check age of Package.resolved
+          resolved_age=$(find Package.resolved -mtime +30 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$resolved_age" -gt 0 ]; then
+            echo "⚠️  **Note:** Package.resolved is more than 30 days old - consider updating dependencies" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Freshness:** Dependencies recently resolved" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "📦 **Package Resolution:** No Package.resolved found" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Check project file for potential issues
+        if [ -f "Apex.xcodeproj/project.pbxproj" ]; then
+          # Check for absolute paths (bad practice)
+          absolute_paths=$(grep -c "^\s*/.*" Apex.xcodeproj/project.pbxproj || echo "0")
+          if [ "$absolute_paths" -gt 5 ]; then
+            echo "⚠️  **Project Health:** Detected potential absolute paths in project file" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Project Health:** No obvious path issues detected" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Recommendation:** Regular dependency updates and security reviews keep your app secure." >> $GITHUB_STEP_SUMMARY
+    
+    - name: Upload security scan results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-scan-results
+        path: |
+          security_scan.txt
+          http_calls.txt
+          debug_code.txt
+          package-deps.json
+          Apex/Package.resolved
+        retention-days: 30
+    
+    - name: Security gate check
+      if: steps.security-scan.outputs.security_issues > 3
+      run: |
+        echo "❌ Security scan found ${{ steps.security-scan.outputs.security_issues }} potential issues"
+        echo "This exceeds the threshold of 3 issues. Please review the security scan results."
+        echo "If these are false positives, you can adjust the scanning rules in the workflow."
+        exit 1
+
+  license-compliance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: License compliance check
+      run: |
+        echo "## 📄 License Compliance Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for LICENSE file
+        if [ -f "LICENSE" ] || [ -f "LICENSE.md" ] || [ -f "LICENSE.txt" ]; then
+          echo "✅ **Project License:** Found in repository" >> $GITHUB_STEP_SUMMARY
+          
+          # Show license type
+          license_file=$(find . -maxdepth 1 -name "LICENSE*" | head -1)
+          license_type=$(head -1 "$license_file" | grep -i -o -E "(MIT|Apache|GPL|BSD|ISC|Mozilla)" || echo "Custom/Unknown")
+          echo "📝 **License Type:** $license_type" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "⚠️  **Project License:** No LICENSE file found in repository root" >> $GITHUB_STEP_SUMMARY
+          echo "Consider adding a LICENSE file to clarify usage rights." >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Check for copyright notices in source files
+        copyright_files=$(find Apex -name "*.swift" -exec grep -l -i "copyright\|©" {} \; | wc -l)
+        total_swift_files=$(find Apex -name "*.swift" | wc -l)
+        
+        if [ "$copyright_files" -gt 0 ]; then
+          percentage=$((copyright_files * 100 / total_swift_files))
+          echo "📋 **Copyright Notices:** $copyright_files of $total_swift_files Swift files ($percentage%)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "📋 **Copyright Notices:** No copyright notices found in Swift files" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Note:** Ensure all third-party dependencies have compatible licenses." >> $GITHUB_STEP_SUMMARY
+
+  performance-metrics:
+    runs-on: macos-15
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Project metrics analysis
+      run: |
+        echo "## 📈 Project Performance Metrics" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Count lines of code
+        swift_lines=$(find Apex -name "*.swift" -exec cat {} \; | wc -l | tr -d ' ')
+        swift_files=$(find Apex -name "*.swift" | wc -l)
+        
+        echo "📊 **Code Metrics:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Swift files: $swift_files" >> $GITHUB_STEP_SUMMARY
+        echo "- Lines of Swift code: $swift_lines" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$swift_files" -gt 0 ]; then
+          avg_lines_per_file=$((swift_lines / swift_files))
+          echo "- Average lines per file: $avg_lines_per_file" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$avg_lines_per_file" -gt 300 ]; then
+            echo "⚠️  **Note:** Average file size is large - consider refactoring for maintainability" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+        
+        # Check project structure
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🏗️ **Project Structure:**" >> $GITHUB_STEP_SUMMARY
+        
+        # Count directories
+        directories=$(find Apex -type d -name "*.swift" -prune -o -type d -print | wc -l)
+        echo "- Directories: $directories" >> $GITHUB_STEP_SUMMARY
+        
+        # Check for common iOS patterns
+        if find Apex -name "*ViewController.swift" -o -name "*View.swift" | grep -q .; then
+          echo "- Architecture: Likely UIKit/SwiftUI hybrid or traditional UIKit" >> $GITHUB_STEP_SUMMARY
+        elif find Apex -name "*View.swift" | grep -q .; then
+          echo "- Architecture: SwiftUI-based" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Estimate build complexity
+        if [ "$swift_files" -lt 50 ]; then
+          echo "📦 **Build Complexity:** Small project (fast builds expected)" >> $GITHUB_STEP_SUMMARY
+        elif [ "$swift_files" -lt 200 ]; then
+          echo "📦 **Build Complexity:** Medium project (moderate build times)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "📦 **Build Complexity:** Large project (consider modularization)" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  summary:
+    needs: [dependency-analysis, license-compliance, performance-metrics]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Generate final summary
+      run: |
+        echo "## 🎯 Security & Quality Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check job results
+        if [ "${{ needs.dependency-analysis.result }}" == "success" ]; then
+          echo "✅ **Dependency Analysis:** Completed successfully" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Dependency Analysis:** Failed or encountered issues" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.license-compliance.result }}" == "success" ]; then
+          echo "✅ **License Compliance:** Verified" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **License Compliance:** Issues detected" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.performance-metrics.result }}" == "success" ]; then
+          echo "✅ **Performance Metrics:** Analyzed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Performance Metrics:** Analysis failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Review any security issues identified" >> $GITHUB_STEP_SUMMARY
+        echo "- Keep dependencies updated regularly" >> $GITHUB_STEP_SUMMARY  
+        echo "- Monitor performance metrics over time" >> $GITHUB_STEP_SUMMARY
+        echo "- Ensure license compliance for all dependencies" >> $GITHUB_STEP_SUMMARY
