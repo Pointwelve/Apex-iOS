@@ -19,6 +19,7 @@ final class LocalizationManager: ObservableObject {
         didSet {
             UserDefaults.standard.set(currentLanguage.code, forKey: "app_language")
             updateBundle()
+            clearCache()
         }
     }
 
@@ -26,24 +27,51 @@ final class LocalizationManager: ObservableObject {
     let supportedLanguages: [SupportedLanguage] = [.english, .spanish, .french, .german, .japanese]
 
     private var bundle: Bundle = .main
+    private var stringCache: [String: String] = [:]
+    private let cacheQueue = DispatchQueue(label: "localization.cache", qos: .userInitiated)
 
     private init() {
         setupInitialLanguage()
         updateBundle()
     }
 
-    /// Get localized string for given key
+    /// Get localized string for given key with caching
     func localizedString(for key: LocalizationKey, comment: String = "") -> String {
         let keyString = key.rawValue
+        let cacheKey = "\(currentLanguage.code)_\(keyString)"
+
+        // Check cache first
+        if let cachedString = stringCache[cacheKey] {
+            return cachedString
+        }
+
+        // Load and cache the string
         let commentString = comment.isEmpty ? keyString : comment
         // swiftlint:disable:next nslocalizedstring_key
-        return NSLocalizedString(keyString, bundle: bundle, comment: commentString)
+        let localizedString = NSLocalizedString(keyString, bundle: bundle, comment: commentString)
+
+        // Cache the result
+        stringCache[cacheKey] = localizedString
+
+        return localizedString
     }
 
     /// Get localized string with format arguments
     func localizedString(for key: LocalizationKey, arguments: CVarArg...) -> String {
         let format = localizedString(for: key)
         return String(format: format, arguments: arguments)
+    }
+
+    /// Preload commonly used strings for better performance
+    func preloadCommonStrings() {
+        let commonKeys: [LocalizationKey] = [
+            .helloWorld, .welcome, .appName, .appTagline, .settings,
+            .home, .profile, .loading, .okay, .cancel, .done
+        ]
+
+        for key in commonKeys {
+            _ = localizedString(for: key)
+        }
     }
 
     private func setupInitialLanguage() {
@@ -64,6 +92,13 @@ final class LocalizationManager: ObservableObject {
         } else {
             self.bundle = .main
         }
+
+        // Preload common strings after bundle update
+        preloadCommonStrings()
+    }
+
+    private func clearCache() {
+        stringCache.removeAll()
     }
 }
 
@@ -107,7 +142,7 @@ enum LocalizationKey: String, CaseIterable {
     case welcome = "welcome"
     case continueAction = "continue"
     case cancel = "cancel"
-    case ok = "ok"
+    case okay = "ok"
     case done = "done"
     case save = "save"
     case delete = "delete"

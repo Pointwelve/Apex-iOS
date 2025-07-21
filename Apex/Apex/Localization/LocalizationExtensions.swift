@@ -99,44 +99,83 @@ extension View {
 
 // MARK: - Language Selection View
 struct LanguageSelectionView: View {
-    @ObservedObject private var localizationManager = LocalizationManager.shared
-    @Environment(\.dismiss)
-    private var dismiss
+    @StateObject private var localizationManager = LocalizationManager.shared
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
-            List(SupportedLanguage.allCases) { language in
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(language.displayName)
-                            .font(.headline)
-                        Text(language.nativeName)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+            List {
+                ForEach(SupportedLanguage.allCases) { language in
+                    LanguageRow(
+                        language: language,
+                        isSelected: language == localizationManager.currentLanguage
+                    ) {
+                        selectLanguage(language)
                     }
-
-                    Spacer()
-
-                    if language == localizationManager.currentLanguage {
-                        Image(systemName: "checkmark")
-                            .foregroundColor(.accentColor)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    localizationManager.currentLanguage = language
-                    dismiss()
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle(Text(.settings))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
+                    Button(LocalizationKey.done.localized) {
                         dismiss()
                     }
                 }
             }
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func selectLanguage(_ language: SupportedLanguage) {
+        guard language != localizationManager.currentLanguage else { return }
+
+        localizationManager.currentLanguage = language
+
+        // Add haptic feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
+
+        // Dismiss after a slight delay for better UX
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            dismiss()
+        }
+    }
+}
+
+// MARK: - Language Row Component
+private struct LanguageRow: View {
+    let language: SupportedLanguage
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(language.displayName)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text(language.nativeName)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                        .imageScale(.large)
+                        .accessibilityLabel("Selected")
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(language.displayName) language option")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
