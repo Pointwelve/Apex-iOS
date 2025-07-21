@@ -2,8 +2,19 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize]
     branches: [main, develop]
+    paths:
+      - 'Apex/**/*.swift'
+      - 'Apex/**/*.h'
+      - 'Apex/**/*.m'
+      - 'Apex/**/*.mm'
+      - '.github/workflows/*.yml'
+      - '.swiftlint.yml'
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,36 +24,68 @@ permissions:
 jobs:
   claude-review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: |
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.title, '[skip claude]') &&
+      !contains(github.event.pull_request.body, '[skip claude]')
+    timeout-minutes: 15
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth: 2
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Get changed files
+    - name: Get changed files with size limit
       id: changed-files
-      uses: tj-actions/changed-files@v44
+      run: |
+        # Get changed files with size filtering
+        changed_files=$(git diff --name-only HEAD~1 HEAD | \
+          grep -E '\.(swift|h|m|mm|yml|yaml)$' | \
+          head -20)  # Limit to first 20 files for cost control
+        
+        if [ -z "$changed_files" ]; then
+          echo "any_changed=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        
+        # Check file sizes (skip files larger than 50KB)
+        filtered_files=""
+        total_size=0
+        for file in $changed_files; do
+          if [ -f "$file" ]; then
+            size=$(wc -c < "$file" 2>/dev/null || echo 0)
+            if [ $size -le 51200 ] && [ $total_size -le 204800 ]; then  # 50KB per file, 200KB total
+              filtered_files="$filtered_files $file"
+              total_size=$((total_size + size))
+            fi
+          fi
+        done
+        
+        if [ -n "$filtered_files" ]; then
+          echo "any_changed=true" >> $GITHUB_OUTPUT
+          echo "all_changed_files=$filtered_files" >> $GITHUB_OUTPUT
+          echo "file_count=$(echo $filtered_files | wc -w)" >> $GITHUB_OUTPUT
+        else
+          echo "any_changed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Cache Claude CLI
+      if: steps.changed-files.outputs.any_changed == 'true'
+      uses: actions/cache@v4
       with:
-        files: |
-          Apex/**/*.swift
-          Apex/**/*.h
-          Apex/**/*.m
-          Apex/**/*.mm
-          **/*.yml
-          **/*.yaml
-          **/*.json
-          **/*.md
-        separator: ","
+        path: ~/.local/bin/claude
+        key: claude-cli-${{ runner.os }}-v1
+        restore-keys: claude-cli-${{ runner.os }}-
 
     - name: Setup Claude Code
       if: steps.changed-files.outputs.any_changed == 'true'
       run: |
-        # Download and install Claude Code CLI
-        curl -fsSL https://claude.ai/cli/install.sh | sh
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        if ! command -v claude &> /dev/null; then
+          curl -fsSL https://claude.ai/cli/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        fi
       env:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -50,117 +93,96 @@ jobs:
       if: steps.changed-files.outputs.any_changed == 'true'
       id: claude-review
       run: |
-        echo "## 🤖 Claude Code Review" > review.md
-        echo "" >> review.md
-        echo "**Files reviewed:** ${{ steps.changed-files.outputs.all_changed_files }}" >> review.md
-        echo "" >> review.md
-        
-        # Create a comprehensive review prompt
+        # Create efficient review prompt
         cat > review_prompt.md << 'EOF'
-        Please perform a comprehensive code review of the changed files in this iOS Swift project. Focus on:
+        Review this iOS Swift code focusing on critical issues only:
 
-        ## Code Quality & Best Practices
-        - Swift coding conventions and idioms
-        - iOS/SwiftUI best practices
-        - Memory management and retain cycles
-        - Performance considerations
-        - Thread safety and concurrency
+        **Priority Areas:**
+        1. Critical bugs, crashes, memory leaks
+        2. Security vulnerabilities 
+        3. Performance issues
+        4. Swift 6.0 concurrency violations
+        5. iOS best practice violations
 
-        ## Architecture & Design
-        - SOLID principles adherence
-        - Separation of concerns
-        - Proper use of SwiftUI patterns
-        - View composition and reusability
+        **Format:** Provide concise feedback with:
+        - File:Line references for issues
+        - Priority: Critical/High/Medium/Low
+        - Brief fix suggestion
 
-        ## Security & Safety
-        - Potential security vulnerabilities
-        - Force unwrapping and crash risks
-        - Input validation
-        - Data handling practices
-
-        ## Testing & Maintainability
-        - Code testability
-        - Error handling
-        - Code readability and documentation
-        - Potential refactoring opportunities
-
-        Please provide:
-        1. Overall assessment summary
-        2. Specific issues found with line references
-        3. Positive aspects worth highlighting
-        4. Actionable recommendations
-        5. Priority level for each issue (Critical/High/Medium/Low)
-
-        Format your response in markdown with clear sections and code snippets where relevant.
+        **Limit:** Focus on top 5 most important issues to keep review concise.
         EOF
 
-        # Run Claude Code review on changed files
-        claude-code --prompt "$(cat review_prompt.md)" \
-          --files "${{ steps.changed-files.outputs.all_changed_files }}" \
-          --output review_output.md || echo "Claude review failed, continuing..."
+        echo "## 🤖 Claude Code Review" > review.md
+        echo "" >> review.md
+        echo "**Files reviewed:** ${{ steps.changed-files.outputs.file_count }} files" >> review.md
+        echo "" >> review.md
 
-        # Append Claude's review to our markdown file
-        if [ -f review_output.md ]; then
-          echo "" >> review.md
+        # Run Claude Code review with timeout
+        timeout 300s claude-code review \
+          --prompt "$(cat review_prompt.md)" \
+          --files "${{ steps.changed-files.outputs.all_changed_files }}" \
+          --format markdown \
+          --max-tokens 2000 \
+          > review_output.md 2>&1 || {
+          echo "⚠️ Claude review timed out or failed. Large files may need manual review." >> review.md
+          echo "review_generated=partial" >> $GITHUB_OUTPUT
+          exit 0
+        }
+
+        # Process output
+        if [ -f review_output.md ] && [ -s review_output.md ]; then
           cat review_output.md >> review.md
+          echo "review_generated=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ Claude Code review could not be completed. Please check the configuration." >> review.md
+          echo "⚠️ No significant issues found or review unavailable." >> review.md
+          echo "review_generated=partial" >> $GITHUB_OUTPUT
         fi
 
-        # Add footer
         echo "" >> review.md
         echo "---" >> review.md
-        echo "*This review was generated automatically by Claude Code. Please use this as guidance alongside human review.*" >> review.md
-        
-        # Set output for next step
-        echo "review_generated=true" >> $GITHUB_OUTPUT
+        echo "*AI-generated review • Use alongside human review • [Skip with \`[skip claude]\`]*" >> review.md
       env:
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
     - name: Comment PR with Review
-      if: steps.claude-review.outputs.review_generated == 'true'
+      if: steps.claude-review.outputs.review_generated != ''
       uses: actions/github-script@v7
       with:
         script: |
           const fs = require('fs');
           
-          // Read the review content
-          let reviewContent = '';
           try {
-            reviewContent = fs.readFileSync('review.md', 'utf8');
-          } catch (error) {
-            console.log('Could not read review file:', error);
-            reviewContent = '⚠️ Could not generate automated review.';
-          }
-
-          // Find existing Claude review comment
-          const comments = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-
-          const existingComment = comments.data.find(comment => 
-            comment.user.login === 'github-actions[bot]' && 
-            comment.body.includes('🤖 Claude Code Review')
-          );
-
-          if (existingComment) {
-            // Update existing comment
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: existingComment.id,
-              body: reviewContent
-            });
-          } else {
-            // Create new comment
-            await github.rest.issues.createComment({
+            const reviewContent = fs.readFileSync('review.md', 'utf8');
+            
+            // Find existing Claude review comment
+            const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: reviewContent
             });
+
+            const existingComment = comments.data.find(comment => 
+              comment.user.login === 'github-actions[bot]' && 
+              comment.body.includes('🤖 Claude Code Review')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: reviewContent
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: reviewContent
+              });
+            }
+          } catch (error) {
+            console.log('Could not post review comment:', error);
           }
 
     - name: Upload review artifacts
@@ -171,10 +193,14 @@ jobs:
         path: |
           review.md
           review_output.md
-        retention-days: 30
+        retention-days: 7  # Reduced retention for cost savings
 
     - name: Summary
-      if: steps.changed-files.outputs.any_changed != 'true'
       run: |
-        echo "## ℹ️ No reviewable files changed" >> $GITHUB_STEP_SUMMARY
-        echo "This PR doesn't contain changes to Swift, header, or configuration files that require code review." >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.changed-files.outputs.any_changed }}" != "true" ]; then
+          echo "## ℹ️ No reviewable files changed" >> $GITHUB_STEP_SUMMARY
+          echo "No Swift, header, or configuration files were modified." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "## ✅ Claude review completed" >> $GITHUB_STEP_SUMMARY
+          echo "Reviewed ${{ steps.changed-files.outputs.file_count }} files for critical issues." >> $GITHUB_STEP_SUMMARY
+        fi

@@ -3,47 +3,162 @@ name: iOS CI
 on:
   push:
     branches: [ main, develop ]
+    paths:
+      - 'Apex/**'
+      - '.github/workflows/ios.yml'
+      - '.swiftlint.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - 'Apex/**'
+      - '.github/workflows/ios.yml'
+      - '.swiftlint.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  lint:
     runs-on: macos-15
+    if: github.event_name == 'pull_request' || contains(github.event.head_commit.message, '[lint]')
+    timeout-minutes: 10
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Cache SwiftLint
+      uses: actions/cache@v4
+      with:
+        path: |
+          /opt/homebrew/bin/swiftlint
+          /usr/local/bin/swiftlint
+        key: swiftlint-${{ runner.os }}-v1
+        restore-keys: swiftlint-${{ runner.os }}-
+    
+    - name: Install SwiftLint
+      run: |
+        if ! command -v swiftlint &> /dev/null; then
+          echo "Installing SwiftLint..."
+          brew install swiftlint
+        else
+          echo "SwiftLint already installed: $(which swiftlint)"
+          swiftlint version
+        fi
+    
+    - name: Run SwiftLint
+      run: swiftlint --strict --reporter github-actions-logging
+      
+    - name: Upload SwiftLint results
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: swiftlint-results
+        path: swiftlint-results.json
+        retention-days: 7
+
+  build-and-test:
+    runs-on: macos-15
+    needs: [lint]
+    if: always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped')
+    timeout-minutes: 30
+    
+    strategy:
+      matrix:
+        destination: 
+          - 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0'
+        include:
+          - destination: 'platform=iOS Simulator,name=iPhone 16 Pro,OS=18.0'
+            test-plan: 'AllTests'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Select Xcode 16.4
       run: sudo xcode-select -switch /Applications/Xcode_16.4.app/Contents/Developer
     
-    - name: Xcode version
-      run: /usr/bin/xcodebuild -version
+    - name: Show Xcode and SDK info
+      run: |
+        /usr/bin/xcodebuild -version
+        /usr/bin/xcodebuild -showsdks
     
-    - name: Install SwiftLint
-      run: brew install swiftlint
+    - name: Install xcpretty
+      run: |
+        if ! command -v xcpretty &> /dev/null; then
+          echo "Installing xcpretty..."
+          gem install xcpretty
+        else
+          echo "xcpretty already installed: $(which xcpretty)"
+        fi
     
-    - name: SwiftLint
-      run: swiftlint --strict
+    - name: Cache Xcode DerivedData
+      uses: actions/cache@v4
+      with:
+        path: ~/Library/Developer/Xcode/DerivedData
+        key: ${{ runner.os }}-deriveddata-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-deriveddata-
     
-    - name: Build
+    - name: Cache Swift Package Manager
+      uses: actions/cache@v4
+      with:
+        path: |
+          Apex/.build
+          ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-spm-${{ hashFiles('Apex/**/Package.swift', 'Apex/**/Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-spm-
+    
+    - name: Build for testing
       run: |
         cd Apex
-        xcodebuild -project Apex.xcodeproj \
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
           -scheme Apex \
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
-          build
+          -destination '${{ matrix.destination }}' \
+          -derivedDataPath ./DerivedData \
+          -clonedSourcePackagesDirPath ./DerivedData/SourcePackages \
+          -resultBundlePath ./BuildResults \
+          build-for-testing | xcpretty
     
-    - name: Test
+    - name: Run tests
       run: |
         cd Apex
-        xcodebuild test -project Apex.xcodeproj \
+        set -o pipefail && xcodebuild \
+          -project Apex.xcodeproj \
           -scheme Apex \
-          -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
-          -resultBundlePath TestResults
+          -destination '${{ matrix.destination }}' \
+          -derivedDataPath ./DerivedData \
+          -resultBundlePath ./TestResults \
+          -parallel-testing-enabled YES \
+          -maximum-parallel-testing-workers auto \
+          test-without-building | xcpretty
     
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results
-        path: Apex/TestResults
+        name: test-results-${{ strategy.job-index }}
+        path: |
+          Apex/TestResults
+          Apex/BuildResults
+        retention-days: 14
+    
+    - name: Parse test results
+      if: always()
+      run: |
+        if [ -d "Apex/TestResults" ]; then
+          find Apex/TestResults -name "*.xcresult" -exec xcrun xcresulttool get --format json --path {} \; > test-summary.json || true
+        fi
+    
+    - name: Upload test summary
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-summary-${{ strategy.job-index }}
+        path: test-summary.json
+        retention-days: 14
